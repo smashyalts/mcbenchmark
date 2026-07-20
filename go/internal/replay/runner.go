@@ -114,16 +114,23 @@ rampLoop:
 	rampTicker.Stop()
 	log.Printf("ramp complete: launched %d sessions, target %d", launched, sc.Load.TargetPlayers)
 
-	// Wait until the run deadline, then signal stop.
+	// Finish when every session has ended, or at the run deadline — whichever
+	// comes first.
+	//
+	// max_duration_minutes is a ceiling, not a target. Waiting for it
+	// unconditionally meant a 16-second capture replayed with reuse_policy
+	// "once" still blocked for the full limit with nothing connected, which
+	// reads as a hang.
+	drained := make(chan struct{})
+	go func() { wg.Wait(); close(drained) }()
 	select {
+	case <-drained:
+		log.Printf("all sessions finished; draining")
 	case <-time.After(time.Until(deadline)):
 		log.Printf("duration limit reached (%s); draining", runDur)
 	}
 	close(stop)
 
-	// Bounded drain so a stuck socket cannot hang the run.
-	drained := make(chan struct{})
-	go func() { wg.Wait(); close(drained) }()
 	select {
 	case <-drained:
 	case <-time.After(15 * time.Second):
