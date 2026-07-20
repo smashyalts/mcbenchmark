@@ -8,8 +8,10 @@ import com.mcbench.capture.model.RawEvent;
 import java.util.UUID;
 
 import org.bukkit.Location;
+import org.bukkit.Material;
 import org.bukkit.entity.Entity;
 import org.bukkit.entity.Player;
+import org.bukkit.inventory.ItemStack;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
@@ -48,13 +50,20 @@ public final class CaptureListener implements Listener {
     private final PlayerIndex index;
     private final boolean captureCommands;
     private final int maxCommandLength;
+    private final boolean captureInventory;
 
     public CaptureListener(CaptureManager mgr, PlayerIndex index, boolean captureCommands,
                            int maxCommandLength) {
+        this(mgr, index, captureCommands, maxCommandLength, true);
+    }
+
+    public CaptureListener(CaptureManager mgr, PlayerIndex index, boolean captureCommands,
+                           int maxCommandLength, boolean captureInventory) {
         this.mgr = mgr;
         this.index = index;
         this.captureCommands = captureCommands;
         this.maxCommandLength = maxCommandLength;
+        this.captureInventory = captureInventory;
     }
 
     @EventHandler(priority = EventPriority.MONITOR)
@@ -76,6 +85,44 @@ public final class CaptureListener implements Listener {
                 Payloads.markerAt("session_start", loc.getX(), loc.getY(), loc.getZ(),
                         loc.getYaw(), loc.getPitch()), loc);
         index.update(p.getUniqueId(), loc.getX(), loc.getY(), loc.getZ());
+        recordInventory(p, loc);
+    }
+
+    /**
+     * Records what the player is carrying at login, so a replay bot can hold it.
+     *
+     * Tool tier dominates block-break time — barehanded stone takes 7.5 seconds
+     * against a diamond pickaxe's 0.4 — so a trace recorded with a pickaxe and
+     * replayed empty-handed reproduces neither the timing nor, for harder blocks,
+     * the break at all. bench-playerdata writes this into the bot's player data
+     * before it connects, which is the only way to arm a client: a replay client
+     * cannot give itself items over the wire.
+     *
+     * One event per session, on the main thread. It allocates, unlike the hot
+     * path, but it fires once per login rather than 20 times a second per player.
+     */
+    private void recordInventory(Player p, Location loc) {
+        if (!captureInventory) {
+            return;
+        }
+        ItemStack[] contents = p.getInventory().getContents();
+        int[] slots = new int[contents.length];
+        String[] ids = new String[contents.length];
+        int[] counts = new int[contents.length];
+        int n = 0;
+        for (int i = 0; i < contents.length; i++) {
+            ItemStack it = contents[i];
+            if (it == null || it.getType() == Material.AIR || it.getAmount() <= 0) {
+                continue;
+            }
+            slots[n] = i;
+            ids[n] = it.getType().getKey().toString();
+            counts[n] = it.getAmount();
+            n++;
+        }
+        mgr.record(p.getUniqueId(), RawEvent.KIND_INVENTORY_SNAPSHOT,
+                Payloads.inventory(p.getInventory().getHeldItemSlot(), slots, ids, counts, n),
+                loc);
     }
 
     @EventHandler(priority = EventPriority.MONITOR)

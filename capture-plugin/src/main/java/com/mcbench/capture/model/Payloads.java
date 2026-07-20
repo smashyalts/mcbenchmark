@@ -126,6 +126,32 @@ public final class Payloads {
     }
 
     /**
+     * The player's inventory at login: the selected hotbar slot, then one entry
+     * per non-empty stack.
+     *
+     * Takes parallel arrays rather than Bukkit types so payload encoding stays in
+     * one Bukkit-free place, matching every other payload here. Slots are Bukkit
+     * indices (0-35 main, 36-39 armor boots-first, 40 offhand); the replay side
+     * maps them to the ones player data uses.
+     *
+     * Item identity is the material id only. Enchantments and durability are not
+     * recorded: they need the full component tree, and tool *tier* already
+     * accounts for most of the difference in how long a block takes to break.
+     */
+    public static byte[] inventory(int selectedSlot, int[] slots, String[] ids,
+                                   int[] counts, int n) {
+        ByteWriter w = new ByteWriter();
+        w.varInt(selectedSlot);
+        w.varInt(n);
+        for (int i = 0; i < n; i++) {
+            w.varInt(slots[i]);
+            w.string(ids[i]);
+            w.varInt(counts[i]);
+        }
+        return w.toByteArray();
+    }
+
+    /**
      * An absolute position the server moved the player to.
      *
      * Same encoding as the session_start marker's position, minus the string:

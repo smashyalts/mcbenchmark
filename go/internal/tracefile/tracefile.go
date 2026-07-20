@@ -10,6 +10,9 @@
 //	  [schema >= 2] origin: has_origin Bool
 //	                        if set: x,y,z Float64BE, yaw,pitch Float32BE,
 //	                                dimension VarInt, exact Bool
+//	  [schema >= 3] inventory: has_inventory Bool
+//	                        if set: selected_slot VarInt, item_count VarInt,
+//	                                per item: slot VarInt, id String, count VarInt
 //	  event_count VarInt
 //	  events: [delta_offset_us VarLong][kind VarInt][data_len VarInt][data]
 //
@@ -28,13 +31,15 @@ import (
 	"github.com/pierrec/lz4/v4"
 
 	"mcbench/internal/mcwire"
+	"mcbench/internal/rawevent"
 )
 
 var magic = []byte("MCT1")
 
-// SchemaVersion 2 added the session origin. Version 1 files still read: they
-// simply carry no origin, and every consumer treats that as "unknown".
-const SchemaVersion = 2
+// SchemaVersion 2 added the session origin, 3 the login inventory. Older files
+// still read: they simply carry neither, and every consumer treats that as
+// "unknown".
+const SchemaVersion = 3
 
 type TraceEvent struct {
 	OffsetUs int64
@@ -62,6 +67,13 @@ type Origin struct {
 	Exact      bool
 }
 
+// Inventory is a captured login inventory. Slots are Bukkit indices (0-35 main,
+// 36-39 armor boots-first, 40 offhand).
+type Inventory struct {
+	SelectedSlot int32
+	Items        []rawevent.ItemStack
+}
+
 type Trace struct {
 	SchemaVersion   uint32
 	ProtocolVersion uint32
@@ -71,7 +83,12 @@ type Trace struct {
 	// Origin is nil when the trace predates schema 2 or the compiler could not
 	// resolve a position.
 	Origin *Origin
-	Events []TraceEvent
+	// Inventory is what the captured player was carrying at login, written into
+	// the bot's player data by bench-playerdata. Nil when unknown — in which case
+	// the bot mines barehanded, which is a 20x error in block-break time against
+	// the diamond pickaxe the capture may have used.
+	Inventory *Inventory
+	Events    []TraceEvent
 }
 
 // Write serializes and writes the trace to path.
@@ -101,6 +118,23 @@ func (t *Trace) Write(path string) error {
 		w.Bool(t.Origin.Exact)
 	} else {
 		w.Bool(false)
+	}
+	if t.SchemaVersion >= 3 {
+		if t.Inventory != nil {
+			w.Bool(true)
+			w.VarInt(t.Inventory.SelectedSlot)
+			w.VarInt(int32(len(t.Inventory.Items)))
+			for _, it := range t.Inventory.Items {
+				w.VarInt(it.Slot)
+				w.String(it.ID)
+				w.VarInt(it.Count)
+			}
+		} else {
+			w.Bool(false)
+		}
+	} else if t.Inventory != nil {
+		return fmt.Errorf("trace %s: inventory requires schema >= 3, have %d",
+			t.TraceID, t.SchemaVersion)
 	}
 	w.VarInt(int32(len(t.Events)))
 	prev := int64(0)
@@ -192,6 +226,39 @@ func Read(path string) (*Trace, error) {
 				return nil, err
 			}
 			t.Origin = o
+		}
+	}
+	if t.SchemaVersion >= 3 {
+		has, err := r.Bool()
+		if err != nil {
+			return nil, fmt.Errorf("%s: inventory flag: %w", path, err)
+		}
+		if has {
+			inv := &Inventory{}
+			if inv.SelectedSlot, err = r.VarInt(); err != nil {
+				return nil, err
+			}
+			cnt, err := r.VarInt()
+			if err != nil {
+				return nil, err
+			}
+			if cnt < 0 {
+				return nil, fmt.Errorf("%s: negative inventory size %d", path, cnt)
+			}
+			for i := int32(0); i < cnt; i++ {
+				var it rawevent.ItemStack
+				if it.Slot, err = r.VarInt(); err != nil {
+					return nil, err
+				}
+				if it.ID, err = r.String(); err != nil {
+					return nil, err
+				}
+				if it.Count, err = r.VarInt(); err != nil {
+					return nil, err
+				}
+				inv.Items = append(inv.Items, it)
+			}
+			t.Inventory = inv
 		}
 	}
 	n, err := r.VarInt()

@@ -41,7 +41,7 @@ Reference: Go `internal/rawevent`, Java `com.mcbench.capture.model.RawEvent`.
 0 MOVE   1 SPRINT_TOGGLE  2 SNEAK_TOGGLE  3 DIG    4 PLACE_BLOCK
 5 USE_ITEM  6 INTERACT_ENTITY  7 ATTACK_ENTITY  8 INV_OPEN  9 INV_CLICK
 10 INV_CLOSE  11 CMD  12 MOB_SPAWN  13 MOB_DESPAWN  14 MARKER
-15 CREATIVE_SET  16 REANCHOR
+15 CREATIVE_SET  16 REANCHOR  17 INVENTORY_SNAPSHOT
 ```
 
 ## 2. Payload encodings
@@ -63,6 +63,7 @@ Reference: Go `internal/rawevent`, Java `com.mcbench.capture.model.RawEvent`.
 | `MOB_DESPAWN` | `entity_type` `reason` (2× `VarInt`) |
 | `MARKER` | `marker` (`String`), then optionally `x` `y` `z` (3× `Float64BE`) and `yaw` `pitch` (2× `Float32BE`) |
 | `REANCHOR` | `x` `y` `z` (3× `Float64BE`), `yaw` `pitch` (2× `Float32BE`), `dimension` (`VarInt`) — an absolute position the server moved the player to |
+| `INVENTORY_SNAPSHOT` | `selected_slot` (`VarInt`), `item_count` (`VarInt`), then per item: `slot` (`VarInt`), `id` (`String`), `count` (`VarInt`) — the player's inventory at login |
 | `CREATIVE_SET` | `slot` `item_id` `count` (3× `VarInt`) — creative inventory set; server writes the item straight into the slot (replay/demo only) |
 
 Only the `session_start` marker carries the trailing position, and it is the one
@@ -93,6 +94,22 @@ captured command replaying, or the same portal — which arrives as a server
 `sync_position` the reader already folds into the view. The remainder is counted
 as `relocations_unreproduced` in `run.json` rather than faked.
 
+`INVENTORY_SNAPSHOT` is recorded once per login, and exists because a replay
+client cannot give itself items: there is no serverbound packet for it outside
+creative mode. `bench-playerdata` writes the stacks into the bot's player data
+before it connects instead. Without them every bot mines barehanded, and tool
+tier dominates block-break time — barehanded stone is 7.5 seconds against a
+diamond pickaxe's 0.4 — so a mining trace replays as a bot swinging at blocks
+that never break.
+
+Slots are Bukkit indices: 0–35 main inventory, 36–39 armor (boots first), 40
+offhand. Player data numbers them differently (0–35, 100–103, −106), and
+`bench-playerdata` maps between them.
+
+Identity is the material id alone. Enchantments and durability are **not**
+recorded — they need the full item-component tree — so an Efficiency V pickaxe
+replays as a plain one. Tool tier still accounts for most of the difference.
+
 The position fields are optional so that captures written before they existed
 still decode: a reader that runs out of bytes after the `marker` string has read
 a plain marker, not a truncated one.
@@ -122,7 +139,7 @@ implementations. Reference: Go `internal/rawlog`, Java `CaptureLogWriter`.
 ```
 magic "MCT1" (4 bytes)
 lz4-frame of:
-  schema_version   VarInt   2
+  schema_version   VarInt   3
   protocol_version VarInt
   world_profile    String
   trace_id         String
@@ -133,6 +150,11 @@ lz4-frame of:
     yaw, pitch     2× Float32BE
     dimension      VarInt   (0 overworld, 1 nether, 2 end — as §1)
     exact          bool     false if inferred rather than captured
+  has_inventory    bool     (schema >= 3 only)
+  if has_inventory:
+    selected_slot  VarInt
+    item_count     VarInt
+    per item:      slot VarInt, id String, count VarInt
   event_count      VarInt
   repeat event_count times:
     delta_offset_us VarLong  microseconds since previous event
@@ -144,8 +166,9 @@ lz4-frame of:
 Trace files are written and read only by Go, so they use LZ4 (`pierrec/lz4`).
 Reference: Go `internal/tracefile`.
 
-Schema 1 files still read; they simply carry no origin. Schema 2 added the
-origin: where the captured player stood when the session began.
+Older files still read: schema 1 carries no origin, schema 2 no inventory.
+Schema 2 added the origin (where the captured player stood when the session
+began); schema 3 the login inventory (§2, `INVENTORY_SNAPSHOT`).
 
 The origin exists because a replay bot cannot choose its own spawn — the server
 decides, and for an account that has never logged in that means world spawn.

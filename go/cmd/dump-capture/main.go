@@ -117,6 +117,19 @@ func describe(e rawevent.RawEvent) string {
 	case rawevent.KindPlaceBlock:
 		d, _ := rawevent.DecodePlace(e.Payload)
 		return fmt.Sprintf("(%d,%d,%d) face=%d hand=%d", d.X, d.Y, d.Z, d.Face, d.Hand)
+	case rawevent.KindInventorySnapshot:
+		inv, err := rawevent.DecodeInventory(e.Payload)
+		if err != nil {
+			return "(undecodable inventory)"
+		}
+		held := "(empty)"
+		for _, it := range inv.Items {
+			if it.Slot == inv.SelectedSlot {
+				held = it.ID
+			}
+		}
+		return fmt.Sprintf("%d stack(s), holding %s (slot %d)",
+			len(inv.Items), held, inv.SelectedSlot)
 	case rawevent.KindReanchor:
 		a, _ := rawevent.DecodeReanchor(e.Payload)
 		return fmt.Sprintf("-> (%.2f,%.2f,%.2f) yaw=%.1f pitch=%.1f dim=%d",

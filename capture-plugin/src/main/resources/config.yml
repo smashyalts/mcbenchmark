@@ -32,6 +32,12 @@ capture:
   capture_chat: true
   max_command_length: 256
 
+  # Record each player's inventory at login (one event per session). Replay uses
+  # it to arm the bot: mining time depends on the tool held, so a capture made
+  # with a diamond pickaxe replays wrong -- or not at all, for harder blocks --
+  # if the bot logs in empty-handed.
+  capture_inventory: true
+
   # Optional arena/lobby identifier stored on every event's anchor. Empty = none.
   region_id: ''
 

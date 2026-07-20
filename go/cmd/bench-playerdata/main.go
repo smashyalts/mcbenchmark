@@ -81,8 +81,9 @@ func main() {
 	// (round_robin: trace = index % len(traces)), so account N is placed where
 	// the trace N will actually replay.
 	var origins []*tracefile.Origin
+	var invs []*tracefile.Inventory
 	if *manifest != "" {
-		origins = loadOrigins(*manifest)
+		origins, invs = loadTraces(*manifest)
 	}
 	fallback := parseOrigin(*originFlag)
 	if len(origins) == 0 && fallback == nil {
@@ -123,11 +124,16 @@ func main() {
 		uuid := mcproto.OfflineUUID(name)
 		path := filepath.Join(playerDir, formatUUID(uuid)+".dat")
 		if *dryRun {
-			log.Printf("would write %s -> %s at %.2f %.2f %.2f", name, filepath.Base(path), o.X, o.Y, o.Z)
+			items := 0
+			if len(invs) > 0 && invs[i%len(invs)] != nil {
+				items = len(invs[i%len(invs)].Items)
+			}
+			log.Printf("would write %s -> %s at %.2f %.2f %.2f, %d item stack(s)",
+				name, filepath.Base(path), o.X, o.Y, o.Z, items)
 			written++
 			continue
 		}
-		if err := nbt.Write(path, playerNBT(dv, o, int32(*gameMode), uuid)); err != nil {
+		if err := nbt.Write(path, playerNBT(dv, o, invs[i%max(1, len(invs))], int32(*gameMode), uuid)); err != nil {
 			log.Fatalf("write %s: %v", path, err)
 		}
 		written++
@@ -176,28 +182,40 @@ func playerDataDir(world string) string {
 	return candidates[0]
 }
 
-// loadOrigins reads every trace in the manifest and returns their origins in
-// manifest order, nil where a trace carries none.
-func loadOrigins(path string) []*tracefile.Origin {
+// loadTraces reads every trace in the manifest and returns their origins and
+// login inventories in manifest order, nil where a trace carries none.
+func loadTraces(path string) ([]*tracefile.Origin, []*tracefile.Inventory) {
 	man, err := tracefile.LoadManifest(path)
 	if err != nil {
 		log.Fatalf("load manifest: %v", err)
 	}
 	base := filepath.Dir(path)
-	out := make([]*tracefile.Origin, 0, len(man.Traces))
-	have := 0
+	origins := make([]*tracefile.Origin, 0, len(man.Traces))
+	invs := make([]*tracefile.Inventory, 0, len(man.Traces))
+	haveOrigin, haveInv := 0, 0
 	for _, entry := range man.Traces {
 		t, err := tracefile.Read(filepath.Join(base, entry.File))
 		if err != nil {
 			log.Fatalf("read trace %s: %v", entry.File, err)
 		}
 		if t.Origin != nil {
-			have++
+			haveOrigin++
 		}
-		out = append(out, t.Origin)
+		if t.Inventory != nil {
+			haveInv++
+		}
+		origins = append(origins, t.Origin)
+		invs = append(invs, t.Inventory)
 	}
-	log.Printf("%d of %d traces carry an origin", have, len(out))
-	return out
+	log.Printf("%d of %d traces carry an origin, %d carry an inventory",
+		haveOrigin, len(origins), haveInv)
+	if haveInv == 0 {
+		// Worth saying: the bots will mine barehanded, which for anything harder
+		// than dirt means the trace's digs never complete.
+		log.Printf("note: no trace carries a login inventory, so bots start empty-handed. " +
+			"Captures made before capture_inventory existed have none; re-record to get it.")
+	}
+	return origins, invs
 }
 
 func parseOrigin(s string) *tracefile.Origin {
@@ -244,12 +262,12 @@ func readDataVersion(path string) int32 {
 // field the server can default is left out; what remains is the position, the
 // identity, and the handful of vitals that default to zero and would otherwise
 // spawn a dead player.
-func playerNBT(dataVersion int32, o *tracefile.Origin, gameMode int32, uuid [16]byte) nbt.Compound {
+func playerNBT(dataVersion int32, o *tracefile.Origin, inv *tracefile.Inventory, gameMode int32, uuid [16]byte) nbt.Compound {
 	dim, ok := dimensionNames[o.Dimension]
 	if !ok {
 		dim = dimensionNames[0]
 	}
-	return nbt.Compound{
+	root := nbt.Compound{
 		"DataVersion": dataVersion,
 		"Pos":         nbt.List{ElemType: nbt.TagDouble, Items: []any{o.X, o.Y, o.Z}},
 		"Motion":      nbt.List{ElemType: nbt.TagDouble, Items: []any{0.0, 0.0, 0.0}},
@@ -268,6 +286,50 @@ func playerNBT(dataVersion int32, o *tracefile.Origin, gameMode int32, uuid [16]
 		"UUID":                uuidInts(uuid),
 		"Inventory":           nbt.List{ElemType: nbt.TagCompound},
 		"EnderItems":          nbt.List{ElemType: nbt.TagCompound},
+	}
+	if inv != nil {
+		root["Inventory"] = inventoryNBT(inv)
+		root["SelectedItemSlot"] = inv.SelectedSlot
+	}
+	return root
+}
+
+// inventoryNBT converts a captured inventory to the list player data stores.
+//
+// Slot numbering differs between the two: Bukkit hands out 0-35 for the main
+// inventory, 36-39 for armor (boots first), and 40 for the offhand, while player
+// data keeps 0-35, uses 100-103 for armor, and -106 for the offhand. Getting
+// this wrong silently drops the armor and the offhand rather than failing.
+func inventoryNBT(inv *tracefile.Inventory) nbt.List {
+	out := nbt.List{ElemType: nbt.TagCompound}
+	for _, it := range inv.Items {
+		slot, ok := nbtSlot(it.Slot)
+		if !ok {
+			continue
+		}
+		count := it.Count
+		if count < 1 {
+			count = 1
+		}
+		out.Items = append(out.Items, nbt.Compound{
+			"Slot":  int8(slot),
+			"id":    it.ID,
+			"count": count,
+		})
+	}
+	return out
+}
+
+func nbtSlot(bukkit int32) (int32, bool) {
+	switch {
+	case bukkit >= 0 && bukkit <= 35:
+		return bukkit, true
+	case bukkit >= 36 && bukkit <= 39: // armor: boots, leggings, chestplate, helmet
+		return 100 + (bukkit - 36), true
+	case bukkit == 40: // offhand
+		return -106, true
+	default:
+		return 0, false
 	}
 }
 

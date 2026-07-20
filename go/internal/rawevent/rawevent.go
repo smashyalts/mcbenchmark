@@ -33,6 +33,11 @@ const (
 	// teleport, respawn or world change — which breaks the delta chain movement
 	// is stored as. Replay applies it outright instead of accumulating it.
 	KindReanchor int32 = 16
+	// KindInventorySnapshot is the player's inventory at login. Replay cannot
+	// hand a client items over the wire, so bench-playerdata writes them into the
+	// bot's player data instead — and without them every bot mines barehanded,
+	// which is a 20x error in block-break time against a diamond pickaxe.
+	KindInventorySnapshot int32 = 17
 )
 
 var kindNames = map[int32]string{
@@ -42,6 +47,7 @@ var kindNames = map[int32]string{
 	KindInvOpen: "inv_open", KindInvClick: "inv_click", KindInvClose: "inv_close",
 	KindCmd: "cmd", KindMobSpawn: "mob_spawn", KindMobDespawn: "mob_despawn",
 	KindMarker: "marker", KindCreativeSet: "creative_set", KindReanchor: "reanchor",
+	KindInventorySnapshot: "inventory_snapshot",
 }
 
 func KindName(k int32) string {
@@ -376,6 +382,68 @@ func DecodeReanchor(p []byte) (ReanchorPayload, error) {
 	}
 	d.Dimension, err = r.VarInt()
 	return d, err
+}
+
+// ItemStack is one stack in a captured inventory. Slot is a Bukkit index
+// (0-35 main, 36-39 armor boots-first, 40 offhand); bench-playerdata maps it to
+// the numbering player data uses.
+//
+// Identity is the material id alone. Enchantments and durability would need the
+// full component tree; tool tier already accounts for most of the difference in
+// how long a block takes to break.
+type ItemStack struct {
+	Slot  int32
+	ID    string
+	Count int32
+}
+
+// InventoryPayload is the decoded KindInventorySnapshot payload.
+type InventoryPayload struct {
+	SelectedSlot int32
+	Items        []ItemStack
+}
+
+func (d InventoryPayload) Encode() []byte {
+	w := mcwire.NewWriter()
+	w.VarInt(d.SelectedSlot)
+	w.VarInt(int32(len(d.Items)))
+	for _, it := range d.Items {
+		w.VarInt(it.Slot)
+		w.String(it.ID)
+		w.VarInt(it.Count)
+	}
+	return w.Bytes()
+}
+
+func DecodeInventory(p []byte) (InventoryPayload, error) {
+	r := mcwire.NewReader(p)
+	var d InventoryPayload
+	var err error
+	if d.SelectedSlot, err = r.VarInt(); err != nil {
+		return d, err
+	}
+	n, err := r.VarInt()
+	if err != nil {
+		return d, err
+	}
+	if n < 0 {
+		return d, fmt.Errorf("rawevent: negative inventory size %d", n)
+	}
+	d.Items = make([]ItemStack, 0, n)
+	for i := int32(0); i < n; i++ {
+		var it ItemStack
+		if it.Slot, err = r.VarInt(); err != nil {
+			return d, err
+		}
+		if it.ID, err = r.String(); err != nil {
+			return d, err
+		}
+		if it.Count, err = r.VarInt(); err != nil {
+			return d, err
+		}
+		d.Items = append(d.Items, it)
+	}
+	return d, nil
 }
 
 // EncodeMarkerAt mirrors the Java Payloads.markerAt encoding.

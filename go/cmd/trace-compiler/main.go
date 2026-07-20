@@ -226,6 +226,7 @@ func main() {
 				TraceID:         fmt.Sprintf("%s-%06d", *runID, traceNum),
 				DurationUs:      durUs,
 				Origin:          resolveOrigin(evs),
+				Inventory:       resolveInventory(evs),
 				Events:          tevs,
 			}
 			if t.Origin == nil {
@@ -363,6 +364,27 @@ func resolveOrigin(evs []rawevent.RawEvent) *tracefile.Origin {
 			X: float64(x) + 0.5, Y: float64(y) + 1, Z: float64(z) + 0.5,
 			Dimension: e.DimensionID, Exact: true,
 		}
+	}
+	return nil
+}
+
+// resolveInventory pulls the login inventory snapshot out of a session.
+//
+// Replay cannot hand a client items over the wire, so this is written into the
+// bot's player data before it connects. Without it every bot mines barehanded,
+// and tool tier dominates block-break time: barehanded stone takes 7.5 seconds
+// against a diamond pickaxe's 0.4, so a mining trace recorded with a pickaxe
+// replays as a bot swinging at blocks that never break.
+func resolveInventory(evs []rawevent.RawEvent) *tracefile.Inventory {
+	for _, e := range evs {
+		if e.Kind != rawevent.KindInventorySnapshot {
+			continue
+		}
+		inv, err := rawevent.DecodeInventory(e.Payload)
+		if err != nil {
+			continue
+		}
+		return &tracefile.Inventory{SelectedSlot: inv.SelectedSlot, Items: inv.Items}
 	}
 	return nil
 }

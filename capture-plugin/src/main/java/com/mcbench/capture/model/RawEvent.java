@@ -48,6 +48,16 @@ public final class RawEvent {
      * teleport lands somewhere the bot is not.
      */
     public static final int KIND_REANCHOR = 16;
+    /**
+     * The player's inventory as it stood at login, so a replay bot can hold what
+     * they held.
+     *
+     * Without it every bot mines barehanded, and tool tier dominates block-break
+     * time: barehanded stone is 7.5 seconds against a diamond pickaxe's 0.4. A
+     * trace recorded with a pickaxe then replays as a bot swinging at stone that
+     * never breaks, which is not the load the capture described.
+     */
+    public static final int KIND_INVENTORY_SNAPSHOT = 17;
 
     public long tMicro;
     /** Wall-clock epoch millis, used for frame headers only; NOT encoded. */

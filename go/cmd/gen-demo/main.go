@@ -79,13 +79,13 @@ func main() {
 		// Slots are player-inventory-menu indices: 36-44 = hotbar, 9-35 = main.
 		// (0-8 are crafting/armor and are NOT persisted to the Inventory NBT.)
 		if *creative {
-			add(rawevent.KindCreativeSet, csEnc(36, itemDiamond, 64))     // hotbar slot 1
+			add(rawevent.KindCreativeSet, csEnc(36, itemDiamond, 64)) // hotbar slot 1
 			t += stepUs
 			add(rawevent.KindCreativeSet, csEnc(37, itemDiamondBlock, 16)) // hotbar slot 2
 			t += stepUs
-			add(rawevent.KindCreativeSet, csEnc(44, itemGoldenApple, 3))   // hotbar slot 9
+			add(rawevent.KindCreativeSet, csEnc(44, itemGoldenApple, 3)) // hotbar slot 9
 			t += stepUs
-			add(rawevent.KindCreativeSet, csEnc(9, itemDiamond, 32))       // main inventory
+			add(rawevent.KindCreativeSet, csEnc(9, itemDiamond, 32)) // main inventory
 			t += stepUs
 		}
 

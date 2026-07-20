@@ -70,6 +70,8 @@ public final class BenchCapturePlugin extends JavaPlugin {
         boolean anonymize = cfg.getBoolean("capture.anonymize_players", true);
         boolean captureChat = cfg.getBoolean("capture.capture_chat", true);
         int maxCommandLength = cfg.getInt("capture.max_command_length", 256);
+        // One event per login. Off only if item ids in the log are unwanted.
+        boolean captureInventory = cfg.getBoolean("capture.capture_inventory", true);
         int schemaVersion = cfg.getInt("capture.schema_version", 1);
         String serverId = cfg.getString("capture.server_id", "paper-prod-1");
         String regionId = cfg.getString("capture.region_id", "");
@@ -106,7 +108,7 @@ public final class BenchCapturePlugin extends JavaPlugin {
 
         PlayerIndex index = new PlayerIndex();
         CaptureListener listener = new CaptureListener(manager, index, captureChat,
-                maxCommandLength);
+                maxCommandLength, captureInventory);
         getServer().getPluginManager().registerEvents(listener, this);
 
         // Movement comes from the wire, on Netty threads, not from Bukkit events.

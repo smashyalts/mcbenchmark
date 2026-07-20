@@ -55,6 +55,15 @@ public final class InteropFixture {
                     Payloads.reanchor(1600.5, 72.0, -800.25, 90.5f, -12.25f, 1)));
             more.add(ev(10_000, pid, RawEvent.KIND_MARKER,
                     Payloads.markerAt("session_start", -804.5, 79.0, -52.25, 45.5f, 3.75f)));
+            // Held item, armor slot and offhand: the three slot ranges that map
+            // differently into player data.
+            more.add(ev(11_000, pid, RawEvent.KIND_INVENTORY_SNAPSHOT,
+                    Payloads.inventory(0,
+                            new int[] { 0, 39, 40 },
+                            new String[] { "minecraft:diamond_pickaxe",
+                                           "minecraft:iron_helmet",
+                                           "minecraft:shield" },
+                            new int[] { 1, 1, 1 }, 3)));
             w.writeFrame(more, 300L, 400L);
         }
         System.out.println("wrote " + outFile);

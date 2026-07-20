@@ -115,6 +115,14 @@ bench account that has never logged in spawns at **world spawn**, so:
 - if world spawn is not solid ground the bot hovers, and the server kicks it with
   *"Flying is not enabled on this server"* after four seconds.
 
+It also arms them: the capture plugin records each player's inventory at login,
+and `bench-playerdata` writes those stacks into the bot's player data. This
+matters more than it sounds — a replay client cannot give itself items, and tool
+tier dominates block-break time (barehanded stone is 7.5 s against a diamond
+pickaxe's 0.4 s), so a mining trace replayed empty-handed produces a bot swinging
+at blocks that never break. Captures taken before `capture_inventory` existed
+carry none, and the tool says so.
+
 **If you restore a world backup between runs, restore first and place second.**
 Player data lives *inside* the world folder (`world/players/data`), so rolling
 the world back to a pristine state also deletes the accounts you placed. The bot
