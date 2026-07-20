@@ -144,8 +144,14 @@ func (s *Session) dispatch(e tracefile.TraceEvent) {
 			handled = false
 			break
 		}
+		// p.X/Y/Z is the block clicked against and p.Face which side of it, which
+		// is what use_item_on carries; the server derives the placed position
+		// from the two. See CaptureListener.onPlace.
 		_ = s.send(mcproto.SBPlayBlockPlace,
 			mcproto.BlockPlace(p.Hand, p.X, p.Y, p.Z, p.Face, s.nextSeq()))
+		// A real client swings when it places.
+		_ = s.send(mcproto.SBPlayArmAnimation, mcproto.ArmAnimation(0))
+		s.notePlace(p.X, p.Y, p.Z, p.Face)
 
 	case rawevent.KindUseItem:
 		u, err := rawevent.DecodeUseItem(e.Data)

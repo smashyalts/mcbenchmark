@@ -21,6 +21,7 @@ type mockResult struct {
 	keepAliveEcho bool
 	loginName     string
 	digStatuses   []int32
+	placedAt      [][3]int32 // (clicked block + face), i.e. where the block lands
 	err           string
 }
 
@@ -114,6 +115,11 @@ func runMockServer(t *testing.T, ln net.Listener, useCompression bool, out *mock
 		case mcproto.SBPlayBlockDig:
 			if st, err := mcwireVarInt(body); err == nil {
 				out.digStatuses = append(out.digStatuses, st)
+			}
+		case mcproto.SBPlayBlockPlace:
+			if p, err := mcproto.ParseBlockPlace(body); err == nil {
+				dx, dy, dz := faceOffset(p.Face)
+				out.placedAt = append(out.placedAt, [3]int32{p.X + dx, p.Y + dy, p.Z + dz})
 			}
 		case mcproto.SBPlayKeepAlive:
 			if id64, _ := mcproto.ParseKeepAlive(body); id64 == 0x1234 {
@@ -400,5 +406,76 @@ func TestReanchorFarIsCountedNotFaked(t *testing.T) {
 	}
 	if n := coll.Agg.RelocationsUnreproduced.Load(); n != 1 {
 		t.Errorf("relocations_unreproduced = %d, want 1", n)
+	}
+}
+
+// TestPlaceTargetsTheClickedBlockNotThePlacedOne pins the placement geometry.
+//
+// use_item_on carries the block that was *clicked against*, and the server
+// derives the new block's position from that plus the face. Capture used to
+// record the block that appeared, with the face hardcoded to up, so replay asked
+// the server to build one block too high — against a position that is air in a
+// pristine world, which cannot be placed against at all. Like the missing dig
+// START, it failed silently while the run counted the event as replayed.
+func TestPlaceTargetsTheClickedBlockNotThePlacedOne(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	addr := ln.Addr().(*net.TCPAddr)
+
+	var res mockResult
+	done := make(chan struct{})
+	go runMockServer(t, ln, false, &res, done)
+
+	// The capture clicked the top face of (10,64,-5); the block lands above it.
+	tr := &tracefile.Trace{
+		SchemaVersion: tracefile.SchemaVersion, ProtocolVersion: mcproto.ProtocolDefault,
+		WorldProfileID: "test", TraceID: "place", DurationUs: 300_000,
+		Events: []tracefile.TraceEvent{
+			{OffsetUs: 100_000, Kind: rawevent.KindPlaceBlock,
+				Data: rawevent.PlacePayload{X: 10, Y: 64, Z: -5, Face: 1, Hand: 0}.Encode()},
+		},
+	}
+	coll := NewCollector()
+	sess := newTestSession(addr.String(), "127.0.0.1", uint16(addr.Port), tr, coll)
+
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() { defer wg.Done(); sess.Run(stop) }()
+	wg.Wait()
+	close(stop)
+	<-done
+
+	if res.err != "" {
+		t.Fatalf("mock server error: %s", res.err)
+	}
+	if len(res.placedAt) != 1 {
+		t.Fatalf("got %d placements, want 1", len(res.placedAt))
+	}
+	if want := [3]int32{10, 65, -5}; res.placedAt[0] != want {
+		t.Errorf("block would land at %v, want %v", res.placedAt[0], want)
+	}
+	// And the run must be able to say whether it landed, not just that a packet
+	// went out.
+	if got := coll.Agg.PlacesSent.Load(); got != 1 {
+		t.Errorf("places_sent = %d, want 1", got)
+	}
+}
+
+// faceOffset must agree with the server's own direction table, or every
+// confirmation lands on the wrong coordinate.
+func TestFaceOffsets(t *testing.T) {
+	want := map[int32][3]int32{
+		0: {0, -1, 0}, 1: {0, 1, 0}, 2: {0, 0, -1},
+		3: {0, 0, 1}, 4: {-1, 0, 0}, 5: {1, 0, 0},
+	}
+	for face, w := range want {
+		x, y, z := faceOffset(face)
+		if [3]int32{x, y, z} != w {
+			t.Errorf("face %d -> (%d,%d,%d), want %v", face, x, y, z, w)
+		}
 	}
 }

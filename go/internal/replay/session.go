@@ -133,11 +133,12 @@ type Session struct {
 	packetsSent    int64
 	loops          int
 
-	// Positions this session has dug and not yet seen the server confirm.
-	// Written by the dispatch goroutine, read and cleared by the reader
+	// Positions this session has dug or built at and not yet seen the server
+	// confirm. Written by the dispatch goroutine, read and cleared by the reader
 	// goroutine when a block_update arrives, hence the mutex.
-	digMu      sync.Mutex
-	digPending map[[3]int32]bool
+	digMu        sync.Mutex
+	digPending   map[[3]int32]bool
+	placePending map[[3]int32]bool
 
 	dcReason      string
 	dcOnce        sync.Once
@@ -268,20 +269,62 @@ func (s *Session) noteDig(x, y, z int32) {
 	s.agg.DigsSent.Add(1)
 }
 
-// confirmDig matches a clientbound block_update against the digs we sent.
-func (s *Session) confirmDig(b mcproto.BlockUpdate) {
-	if b.StateID != mcproto.AirStateID {
-		return
+// notePlace records where a placement is expected to land.
+//
+// The packet carries the block that was clicked and which face of it, so the
+// new block goes one step along that face — the same arithmetic the server
+// does. Worth tracking for the same reason as digs, and for a sharper one: a
+// placement aimed at the wrong position is not rejected loudly, it simply does
+// nothing, and the run reports the event as replayed either way.
+func (s *Session) notePlace(x, y, z, face int32) {
+	dx, dy, dz := faceOffset(face)
+	s.digMu.Lock()
+	if s.placePending == nil {
+		s.placePending = make(map[[3]int32]bool)
 	}
+	s.placePending[[3]int32{x + dx, y + dy, z + dz}] = true
+	s.digMu.Unlock()
+	s.agg.PlacesSent.Add(1)
+}
+
+// faceOffset maps a protocol block face to the direction it points.
+func faceOffset(face int32) (x, y, z int32) {
+	switch face {
+	case 0:
+		return 0, -1, 0
+	case 1:
+		return 0, 1, 0
+	case 2:
+		return 0, 0, -1
+	case 3:
+		return 0, 0, 1
+	case 4:
+		return -1, 0, 0
+	case 5:
+		return 1, 0, 0
+	}
+	return 0, 0, 0
+}
+
+// confirmBlockUpdate matches a clientbound block_update against the digs and
+// placements we sent: air where we dug, anything else where we built.
+func (s *Session) confirmBlockUpdate(b mcproto.BlockUpdate) {
 	key := [3]int32{b.X, b.Y, b.Z}
 	s.digMu.Lock()
-	pending := s.digPending[key]
-	if pending {
-		delete(s.digPending, key)
+	var dug, built bool
+	if b.StateID == mcproto.AirStateID {
+		if dug = s.digPending[key]; dug {
+			delete(s.digPending, key)
+		}
+	} else if built = s.placePending[key]; built {
+		delete(s.placePending, key)
 	}
 	s.digMu.Unlock()
-	if pending {
+	if dug {
 		s.agg.DigsConfirmed.Add(1)
+	}
+	if built {
+		s.agg.PlacesConfirmed.Add(1)
 	}
 }
 

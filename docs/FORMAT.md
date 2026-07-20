@@ -51,7 +51,7 @@ Reference: Go `internal/rawevent`, Java `com.mcbench.capture.model.RawEvent`.
 | `MOVE` | `dx dy dz yaw pitch` (5× `f32le`), `on_ground` (`bool`) |
 | `SPRINT_TOGGLE` / `SNEAK_TOGGLE` | `on` (`bool`) |
 | `DIG` | `action` `x` `y` `z` `face` (5× `VarInt`); action 0=start 1=cancel 2=finish |
-| `PLACE_BLOCK` | `x` `y` `z` `face` `hand` (5× `VarInt`) |
+| `PLACE_BLOCK` | `x` `y` `z` `face` `hand` (5× `VarInt`) — the block **clicked against** and which face of it, *not* the block that appeared; the new block lands one step along `face`, which is how `use_item_on` expresses a placement |
 | `USE_ITEM` | `hand` `item_id` (2× `VarInt`) |
 | `INTERACT_ENTITY` | `target_hint` `action` (2× `VarInt`) |
 | `ATTACK_ENTITY` | `target_hint` (`VarInt`) |

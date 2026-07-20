@@ -34,6 +34,12 @@ type Aggregate struct {
 	// gone, so a run that broke nothing reads as 0 instead of looking successful.
 	DigsSent      atomic.Int64
 	DigsConfirmed atomic.Int64
+	// PlacesSent / PlacesConfirmed do the same for building. Placement failed
+	// the same silent way digs did — capture recorded the block that appeared
+	// rather than the one clicked against, so the server was asked to build one
+	// block too high, against air — and nothing in the report could show it.
+	PlacesSent      atomic.Int64
+	PlacesConfirmed atomic.Int64
 }
 
 // Sample is one point of the concurrency time series.
@@ -76,6 +82,8 @@ type Report struct {
 	RelocationsUnreproduced int64           `json:"relocations_unreproduced"`
 	DigsSent                int64           `json:"digs_sent"`
 	DigsConfirmed           int64           `json:"digs_confirmed"`
+	PlacesSent              int64           `json:"places_sent"`
+	PlacesConfirmed         int64           `json:"places_confirmed"`
 	PacketsSent             int64           `json:"packets_sent"`
 	BytesIn                 int64           `json:"bytes_in"`
 	BytesOut                int64           `json:"bytes_out"`
@@ -138,6 +146,8 @@ func (c *Collector) WriteReport(dir, scenarioName, target string, protocol, targ
 		RelocationsUnreproduced: c.Agg.RelocationsUnreproduced.Load(),
 		DigsSent:                c.Agg.DigsSent.Load(),
 		DigsConfirmed:           c.Agg.DigsConfirmed.Load(),
+		PlacesSent:              c.Agg.PlacesSent.Load(),
+		PlacesConfirmed:         c.Agg.PlacesConfirmed.Load(),
 		PacketsSent:             c.Agg.PacketsSent.Load(),
 		BytesIn:                 c.Agg.BytesIn.Load(),
 		BytesOut:                c.Agg.BytesOut.Load(),

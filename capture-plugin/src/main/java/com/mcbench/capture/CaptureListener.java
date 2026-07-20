@@ -235,12 +235,57 @@ public final class CaptureListener implements Listener {
                 Payloads.dig(2, b.getX(), b.getY(), b.getZ(), 1), b.getLocation());
     }
 
+    /**
+     * Records a placement the way the protocol expresses it: the block that was
+     * <em>clicked against</em>, plus the face of it that was clicked.
+     *
+     * This is not the block that appeared, and the difference is the whole event.
+     * The serverbound packet is use_item_on, and the server derives where the
+     * block goes from clicked position + face. Recording the placed block instead
+     * — which is what this did, with the face hardcoded to "up" — asks the server
+     * to place one block too high, against a position that in a pristine replay
+     * world is air. You cannot place against air, so useItemOn returns PASS and
+     * nothing happens at all.
+     *
+     * It fails exactly the way the missing dig START did: silently, with the run
+     * still counting the event as replayed. Hence places_confirmed on the replay
+     * side, which reports what the server actually built.
+     */
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onPlace(BlockPlaceEvent e) {
-        var b = e.getBlock();
+        var placed = e.getBlock();
+        var against = e.getBlockAgainst();
         int hand = e.getHand() != null && e.getHand().name().equals("OFF_HAND") ? 1 : 0;
+        int face = faceBetween(against, placed);
+        // A replaceable target (tall grass, water) is clicked directly rather than
+        // against a neighbour, and then the two blocks are the same one.
+        var clicked = (against == null) ? placed : against;
         mgr.record(e.getPlayer().getUniqueId(), RawEvent.KIND_PLACE_BLOCK,
-                Payloads.place(b.getX(), b.getY(), b.getZ(), 1, hand), b.getLocation());
+                Payloads.place(clicked.getX(), clicked.getY(), clicked.getZ(), face, hand),
+                placed.getLocation());
+    }
+
+    /**
+     * The block face pointing from {@code against} towards {@code placed}, in the
+     * protocol's numbering: 0 down, 1 up, 2 north, 3 south, 4 west, 5 east.
+     *
+     * Returns up when the two are the same block or the neighbour is unknown,
+     * which is what a client sends when it clicks a replaceable block directly.
+     */
+    private static int faceBetween(org.bukkit.block.Block against, org.bukkit.block.Block placed) {
+        if (against == null) {
+            return 1;
+        }
+        int dx = placed.getX() - against.getX();
+        int dy = placed.getY() - against.getY();
+        int dz = placed.getZ() - against.getZ();
+        if (dy == 1) return 1;
+        if (dy == -1) return 0;
+        if (dz == -1) return 2;
+        if (dz == 1) return 3;
+        if (dx == -1) return 4;
+        if (dx == 1) return 5;
+        return 1; // same block: clicked a replaceable target
     }
 
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)

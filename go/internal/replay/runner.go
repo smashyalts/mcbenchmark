@@ -64,13 +64,18 @@ func (r *Runner) Run() error {
 			case <-t.C:
 				r.coll.TakeSample()
 				a := &r.coll.Agg
-				digs := ""
+				// confirmed/sent, because sent alone has twice now reported total
+				// success for a run that changed nothing in the world.
+				blocks := ""
 				if sent := a.DigsSent.Load(); sent > 0 {
-					digs = fmt.Sprintf(" digs=%d/%d", a.DigsConfirmed.Load(), sent)
+					blocks += fmt.Sprintf(" digs=%d/%d", a.DigsConfirmed.Load(), sent)
+				}
+				if sent := a.PlacesSent.Load(); sent > 0 {
+					blocks += fmt.Sprintf(" places=%d/%d", a.PlacesConfirmed.Load(), sent)
 				}
 				log.Printf("active=%d connected=%d failed=%d events=%d%s",
 					a.Active.Load(), a.Connected.Load(), a.Failed.Load(),
-					a.EventsReplayed.Load(), digs)
+					a.EventsReplayed.Load(), blocks)
 			}
 		}
 	}()

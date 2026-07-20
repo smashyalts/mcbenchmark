@@ -192,16 +192,17 @@ host/bench-runner.sh host/scenarios/1h-default.yaml <server-host> <server-port>
 The run writes `run.json` (peak concurrency, per-session results, a 5-second
 concurrency time series) and `metrics.prom` (Prometheus text) to the out dir.
 
-**Read `digs_confirmed`, not `events_replayed`.** Sending a dig packet proves
-nothing: the server silently drops one that is out of range or aimed at air, and
-`events_replayed` counts it either way, so a run that changed nothing looks
-identical to one that worked. `digs_confirmed` counts the `block_update` packets
-the server sent back showing the block actually gone, and the live log prints it
-as `digs=confirmed/sent`:
+**Read `digs_confirmed` and `places_confirmed`, not `events_replayed`.** Sending
+a block packet proves nothing: the server silently drops a dig that is out of
+range or aimed at air, and a placement whose target is not a solid block to build
+against, while `events_replayed` counts them either way — so a run that changed
+nothing looks identical to one that worked. The confirmed counters come from the
+`block_update` packets the server sent back, and the live log prints them as
+`confirmed/sent`:
 
 ```
-active=1 connected=1 failed=0 events=124 digs=12/12   <- working
-active=1 connected=1 failed=0 events=124 digs=0/12    <- sent, nothing broke
+active=1 connected=1 failed=0 events=124 digs=12/12 places=4/4   <- working
+active=1 connected=1 failed=0 events=124 digs=0/12  places=0/4   <- sent, world unchanged
 ```
 
 A run also warns at login when the server put a bot somewhere other than where

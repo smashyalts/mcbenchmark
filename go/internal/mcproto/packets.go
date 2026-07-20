@@ -369,6 +369,33 @@ func ParseBlockUpdate(body []byte) (BlockUpdate, error) {
 	return b, err
 }
 
+// BlockPlaceRequest is the serverbound use_item_on as the server reads it: the
+// block that was clicked and which face of it. The new block goes one step
+// along that face — the position is not the placed block.
+type BlockPlaceRequest struct {
+	Hand    int32
+	X, Y, Z int32
+	Face    int32
+}
+
+// ParseBlockPlace decodes a use_item_on body. Used by tests to check the client
+// asks for what it means to ask for; the real server does the same arithmetic.
+func ParseBlockPlace(body []byte) (BlockPlaceRequest, error) {
+	var p BlockPlaceRequest
+	r := mcwire.NewReader(body)
+	var err error
+	if p.Hand, err = r.VarInt(); err != nil {
+		return p, err
+	}
+	packed, err := r.Int64BE()
+	if err != nil {
+		return p, err
+	}
+	p.X, p.Y, p.Z = unpackBlockPos(packed)
+	p.Face, err = r.VarInt()
+	return p, err
+}
+
 // unpackBlockPos reverses blockPos. Each field is sign-extended from its own
 // width: x and z are 26-bit, y is 12-bit, and treating them as unsigned would
 // put every negative coordinate tens of millions of blocks away.

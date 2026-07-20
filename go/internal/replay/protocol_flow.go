@@ -166,7 +166,7 @@ func (s *Session) handlePlay(id int32, body []byte, onPlayReady func(), inConfig
 		// that packets were sent, which is exactly the failure mode that makes a
 		// replay look successful while the world never changes.
 		if b, err := mcproto.ParseBlockUpdate(body); err == nil {
-			s.confirmDig(b)
+			s.confirmBlockUpdate(b)
 		}
 	case mcproto.CBPlayKeepAlive:
 		kid, err := mcproto.ParseKeepAlive(body)
