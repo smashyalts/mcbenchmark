@@ -115,6 +115,29 @@ bench account that has never logged in spawns at **world spawn**, so:
 - if world spawn is not solid ground the bot hovers, and the server kicks it with
   *"Flying is not enabled on this server"* after four seconds.
 
+**For true 1:1 gear, hand the bots the real players' data.** Export the
+production server's player data directory and pass it as `--import`; each trace
+is matched back to the player who produced it and that player's file is copied
+onto the bench account, with only the UUID and position rewritten:
+
+```bash
+bin/bench-playerdata --world /path/to/benchmark-server/world   --manifest .../manifest.json --count 500   --import /path/to/production/world/players/data
+```
+
+This carries everything the inventory snapshot cannot: enchantments, durability,
+XP, hunger, the ender chest, abilities. Verified on Paper 26.1.2 — an imported
+bot logged in with `XpLevel: 42` and the source player's diamond chestplate.
+
+Matching needs the capture's player id, which is `SHA-256(uuid || salt)`. With
+`anonymize_players: false` the salt is sixteen zero bytes, so the tool
+reproduces the hash from each `.dat` filename and matches exactly — verified
+byte-for-byte against an independently computed digest. With anonymisation on
+the salt is random and discarded by design, so pass `--player-map` (lines of
+`hash uuid`) exported at capture time, or accept arbitrary assignment. The tool
+reports `N matched to their own player, M filled from leftovers` and warns loudly
+when nothing matched, because arbitrary gear still produces a plausible-looking
+run.
+
 It also arms them: the capture plugin records each player's inventory at login,
 and `bench-playerdata` writes those stacks into the bot's player data. This
 matters more than it sounds — a replay client cannot give itself items, and tool

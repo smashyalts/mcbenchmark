@@ -307,6 +307,12 @@ type ManifestEntry struct {
 	DurationS int64    `json:"duration_s"`
 	Events    int      `json:"events"`
 	Tags      []string `json:"tags"`
+	// PlayerHash is the capture's anonymised id for the player who produced this
+	// session, hex-encoded. It is what lets bench-playerdata give a bot the real
+	// player's inventory: the capture log never contains a raw UUID, so this hash
+	// is the only link back. Hand-editable, so an operator can pin a specific
+	// player to a specific bench account.
+	PlayerHash string `json:"player_hash,omitempty"`
 }
 
 func (m *Manifest) Save(dir string) error {

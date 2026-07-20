@@ -58,6 +58,9 @@ func main() {
 	gameMode := flag.Int("gamemode", 0, "playerGameType: 0 survival, 1 creative, 2 adventure, 3 spectator")
 	dataVersion := flag.Int("data-version", 0, "override the DataVersion (default: read from the world's level.dat)")
 	dirFlag := flag.String("dir", "", "player data directory (default: auto-detected under --world)")
+	importDir := flag.String("import", "", "directory of real players' .dat files to hand to the bots, 1:1 where they can be matched")
+	playerMap := flag.String("player-map", "", "\"hash uuid\" lines mapping capture ids to real UUIDs; only needed when the capture was anonymised with a random salt")
+	saltHex := flag.String("salt-hex", "", "capture salt, if it was not the default all-zero (anonymize_players: false)")
 	remove := flag.Bool("remove", false, "delete the generated files instead of writing them")
 	dryRun := flag.Bool("dry-run", false, "report what would be written and exit")
 	flag.Parse()
@@ -82,8 +85,28 @@ func main() {
 	// the trace N will actually replay.
 	var origins []*tracefile.Origin
 	var invs []*tracefile.Inventory
+	var hashes []string
 	if *manifest != "" {
-		origins, invs = loadTraces(*manifest)
+		origins, invs, hashes = loadTraces(*manifest)
+	}
+
+	// Real player data beats a synthesised file: it carries enchantments,
+	// durability, XP and the ender chest, none of which the capture's inventory
+	// snapshot records.
+	var imports []*importSource
+	if *importDir != "" {
+		if *manifest == "" {
+			log.Fatalf("--import needs --manifest: without it there is no way to tell which trace belongs to which player")
+		}
+		salt := make([]byte, 16)
+		if *saltHex != "" {
+			b, err := hex.DecodeString(*saltHex)
+			if err != nil {
+				log.Fatalf("--salt-hex: %v", err)
+			}
+			salt = b
+		}
+		imports = assignImports(hashes, loadImportDir(*importDir, salt, *playerMap))
 	}
 	fallback := parseOrigin(*originFlag)
 	if len(origins) == 0 && fallback == nil {
@@ -100,7 +123,7 @@ func main() {
 		log.Fatalf("create %s: %v", playerDir, err)
 	}
 
-	written, skipped, inexact := 0, 0, 0
+	written, skipped, inexact, imported := 0, 0, 0, 0
 	for i := 0; i < *count; i++ {
 		name := fmt.Sprintf("%s%05d", *prefix, i)
 		if len(name) > 16 {
@@ -128,12 +151,34 @@ func main() {
 			if len(invs) > 0 && invs[i%len(invs)] != nil {
 				items = len(invs[i%len(invs)].Items)
 			}
-			log.Printf("would write %s -> %s at %.2f %.2f %.2f, %d item stack(s)",
-				name, filepath.Base(path), o.X, o.Y, o.Z, items)
+			from := fmt.Sprintf("%d item stack(s)", items)
+			if len(imports) > 0 && imports[i%len(imports)] != nil {
+				from = "real player data " + filepath.Base(imports[i%len(imports)].path)
+			}
+			log.Printf("would write %s -> %s at %.2f %.2f %.2f, %s",
+				name, filepath.Base(path), o.X, o.Y, o.Z, from)
 			written++
 			continue
 		}
-		if err := nbt.Write(path, playerNBT(dv, o, invs[i%max(1, len(invs))], int32(*gameMode), uuid)); err != nil {
+		// A real player's file is strictly better than a synthesised one: it
+		// carries enchantments, durability, XP and the ender chest, none of which
+		// the capture's inventory snapshot records.
+		var root nbt.Compound
+		if len(imports) > 0 && imports[i%len(imports)] != nil {
+			var err error
+			root, err = importedNBT(*imports[i%len(imports)], o, uuid)
+			if err != nil {
+				log.Fatalf("import for %s: %v", name, err)
+			}
+			imported++
+		} else {
+			var inv *tracefile.Inventory
+			if len(invs) > 0 {
+				inv = invs[i%len(invs)]
+			}
+			root = playerNBT(dv, o, inv, int32(*gameMode), uuid)
+		}
+		if err := nbt.Write(path, root); err != nil {
 			log.Fatalf("write %s: %v", path, err)
 		}
 		written++
@@ -152,6 +197,9 @@ func main() {
 	}
 	if inexact > 0 {
 		log.Printf("note: %d position(s) were inferred rather than captured", inexact)
+	}
+	if imported > 0 {
+		log.Printf("note: %d account(s) got a real player's data (inventory, XP, ender chest and all)", imported)
 	}
 }
 
@@ -184,7 +232,7 @@ func playerDataDir(world string) string {
 
 // loadTraces reads every trace in the manifest and returns their origins and
 // login inventories in manifest order, nil where a trace carries none.
-func loadTraces(path string) ([]*tracefile.Origin, []*tracefile.Inventory) {
+func loadTraces(path string) ([]*tracefile.Origin, []*tracefile.Inventory, []string) {
 	man, err := tracefile.LoadManifest(path)
 	if err != nil {
 		log.Fatalf("load manifest: %v", err)
@@ -192,6 +240,7 @@ func loadTraces(path string) ([]*tracefile.Origin, []*tracefile.Inventory) {
 	base := filepath.Dir(path)
 	origins := make([]*tracefile.Origin, 0, len(man.Traces))
 	invs := make([]*tracefile.Inventory, 0, len(man.Traces))
+	hashes := make([]string, 0, len(man.Traces))
 	haveOrigin, haveInv := 0, 0
 	for _, entry := range man.Traces {
 		t, err := tracefile.Read(filepath.Join(base, entry.File))
@@ -206,6 +255,7 @@ func loadTraces(path string) ([]*tracefile.Origin, []*tracefile.Inventory) {
 		}
 		origins = append(origins, t.Origin)
 		invs = append(invs, t.Inventory)
+		hashes = append(hashes, entry.PlayerHash)
 	}
 	log.Printf("%d of %d traces carry an origin, %d carry an inventory",
 		haveOrigin, len(origins), haveInv)
@@ -215,7 +265,7 @@ func loadTraces(path string) ([]*tracefile.Origin, []*tracefile.Inventory) {
 		log.Printf("note: no trace carries a login inventory, so bots start empty-handed. " +
 			"Captures made before capture_inventory existed have none; re-record to get it.")
 	}
-	return origins, invs
+	return origins, invs, hashes
 }
 
 func parseOrigin(s string) *tracefile.Origin {

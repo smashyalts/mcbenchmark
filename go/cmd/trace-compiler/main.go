@@ -10,6 +10,7 @@ package main
 import (
 	"bufio"
 	"encoding/binary"
+	"encoding/hex"
 	"flag"
 	"fmt"
 	"hash/fnv"
@@ -236,10 +237,11 @@ func main() {
 				log.Fatalf("write %s: %v", name, err)
 			}
 			manifest.Traces = append(manifest.Traces, tracefile.ManifestEntry{
-				File:      name,
-				DurationS: durUs / 1_000_000,
-				Events:    len(tevs),
-				Tags:      classify(counts, len(tevs)),
+				File:       name,
+				PlayerHash: hex.EncodeToString(k.player[:]),
+				DurationS:  durUs / 1_000_000,
+				Events:     len(tevs),
+				Tags:       classify(counts, len(tevs)),
 			})
 		}
 	}
