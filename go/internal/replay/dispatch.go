@@ -134,6 +134,9 @@ func (s *Session) dispatch(e tracefile.TraceEvent) {
 		_ = s.send(mcproto.SBPlayBlockDig,
 			mcproto.BlockDig(d.Action, d.X, d.Y, d.Z, d.Face, s.nextSeq()))
 		_ = s.send(mcproto.SBPlayArmAnimation, mcproto.ArmAnimation(0))
+		if d.Action == mcproto.DigFinish {
+			s.noteDig(d.X, d.Y, d.Z)
+		}
 
 	case rawevent.KindPlaceBlock:
 		p, err := rawevent.DecodePlace(e.Data)

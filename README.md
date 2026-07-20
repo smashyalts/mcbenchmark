@@ -136,6 +136,27 @@ host/bench-runner.sh host/scenarios/1h-default.yaml <server-host> <server-port>
 The run writes `run.json` (peak concurrency, per-session results, a 5-second
 concurrency time series) and `metrics.prom` (Prometheus text) to the out dir.
 
+**Read `digs_confirmed`, not `events_replayed`.** Sending a dig packet proves
+nothing: the server silently drops one that is out of range or aimed at air, and
+`events_replayed` counts it either way, so a run that changed nothing looks
+identical to one that worked. `digs_confirmed` counts the `block_update` packets
+the server sent back showing the block actually gone, and the live log prints it
+as `digs=confirmed/sent`:
+
+```
+active=1 connected=1 failed=0 events=124 digs=12/12   <- working
+active=1 connected=1 failed=0 events=124 digs=0/12    <- sent, nothing broke
+```
+
+A run also warns at login when the server put a bot somewhere other than where
+its trace was captured, which is the usual reason for `digs=0/N`:
+
+```
+WARNING: BENCH_00000 spawned at (-807.5, 78.0, -51.5) but its trace was captured
+at (5.5, 71.0, 6.5), 815 blocks away. Block events will be out of range and do
+nothing. Run bench-playerdata ... before every run.
+```
+
 ## Try it without a server
 
 The whole pipeline runs offline against synthetic data:

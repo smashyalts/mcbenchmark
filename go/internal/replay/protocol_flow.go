@@ -146,6 +146,7 @@ func (s *Session) handlePlay(id int32, body []byte, onPlayReady func(), inConfig
 		s.view.HasPos = true
 		x, y, z, yaw, pitch := s.view.X, s.view.Y, s.view.Z, s.view.Yaw, s.view.Pitch
 		s.viewMu.Unlock()
+		s.checkSpawnAgainstOrigin(x, y, z)
 		if err := s.send(mcproto.SBPlayTeleportConfirm, mcproto.TeleportConfirm(p.TeleportID)); err != nil {
 			s.fail("teleport confirm: " + err.Error())
 			return true
@@ -154,6 +155,13 @@ func (s *Session) handlePlay(id int32, body []byte, onPlayReady func(), inConfig
 		_ = s.send(mcproto.SBPlayPositionLook,
 			mcproto.PositionLook(x, y, z, yaw, pitch, true))
 		onPlayReady()
+	case mcproto.CBPlayBlockUpdate:
+		// The server's verdict on a dig. Without this the run can only report
+		// that packets were sent, which is exactly the failure mode that makes a
+		// replay look successful while the world never changes.
+		if b, err := mcproto.ParseBlockUpdate(body); err == nil {
+			s.confirmDig(b)
+		}
 	case mcproto.CBPlayKeepAlive:
 		kid, err := mcproto.ParseKeepAlive(body)
 		if err != nil {

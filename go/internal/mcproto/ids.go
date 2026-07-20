@@ -65,6 +65,7 @@ const (
 	CBPlayContainerClose      int32 = 0x11 // container_close
 	CBPlayContainerSetContent int32 = 0x12 // container_set_content (carries state_id)
 	CBPlayContainerSetSlot    int32 = 0x14 // container_set_slot (carries state_id)
+	CBPlayBlockUpdate         int32 = 0x08 // block_update (server's verdict on a dig)
 	CBPlayDisconnect          int32 = 0x20
 	CBPlayChunkBatchFinished  int32 = 0x0B // chunk_batch_finished
 	CBPlayKeepAlive           int32 = 0x2C

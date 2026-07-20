@@ -3,6 +3,8 @@ package replay
 import (
 	"errors"
 	"fmt"
+	"log"
+	"math"
 	"net"
 	"sync"
 	"sync/atomic"
@@ -94,6 +96,10 @@ type Session struct {
 	// EnableFlight sends player_abilities(flying) at play start (creative demos).
 	EnableFlight bool
 
+	// Origin is where the trace was captured, used only to warn when the server
+	// spawns the bot somewhere else. Nil for traces that carry none.
+	Origin *tracefile.Origin
+
 	// LoopTrace replays the trace repeatedly until PlayFor; false (reuse_policy
 	// "once") plays it a single time, then the session ends. Ordered scenarios
 	// like the auction-house list→buy flow need a single pass.
@@ -127,8 +133,15 @@ type Session struct {
 	packetsSent    int64
 	loops          int
 
-	dcReason string
-	dcOnce   sync.Once
+	// Positions this session has dug and not yet seen the server confirm.
+	// Written by the dispatch goroutine, read and cleared by the reader
+	// goroutine when a block_update arrives, hence the mutex.
+	digMu      sync.Mutex
+	digPending map[[3]int32]bool
+
+	dcReason      string
+	dcOnce        sync.Once
+	spawnWarnOnce sync.Once
 }
 
 func (s *Session) setState(st State) { s.state.Store(int32(st)) }
@@ -237,3 +250,67 @@ func (s *Session) send(id int32, body []byte) error {
 	}
 	return err
 }
+
+// noteDig records a position this session asked the server to break, so the
+// reader can tell whether the server actually did it.
+//
+// Sending a dig packet is not evidence the block broke. The server silently
+// drops one it considers out of range, or for a block that is already air, and
+// a run that counts "events replayed" alone reports total success either way.
+// That has now been the wrong answer twice, so the client checks.
+func (s *Session) noteDig(x, y, z int32) {
+	s.digMu.Lock()
+	if s.digPending == nil {
+		s.digPending = make(map[[3]int32]bool)
+	}
+	s.digPending[[3]int32{x, y, z}] = true
+	s.digMu.Unlock()
+	s.agg.DigsSent.Add(1)
+}
+
+// confirmDig matches a clientbound block_update against the digs we sent.
+func (s *Session) confirmDig(b mcproto.BlockUpdate) {
+	if b.StateID != mcproto.AirStateID {
+		return
+	}
+	key := [3]int32{b.X, b.Y, b.Z}
+	s.digMu.Lock()
+	pending := s.digPending[key]
+	if pending {
+		delete(s.digPending, key)
+	}
+	s.digMu.Unlock()
+	if pending {
+		s.agg.DigsConfirmed.Add(1)
+	}
+}
+
+// checkSpawnAgainstOrigin warns when the server put the bot somewhere other
+// than where its trace was captured.
+//
+// This is the single most common reason a replay looks like it worked and
+// changed nothing: the account had no player data, so it spawned at world spawn,
+// out of interaction range of every block the trace touches. It is invisible
+// from the run report, so say it plainly, once, at the point it is known.
+func (s *Session) checkSpawnAgainstOrigin(x, y, z float64) {
+	if s.Origin == nil {
+		return
+	}
+	dx, dy, dz := x-s.Origin.X, y-s.Origin.Y, z-s.Origin.Z
+	if dx*dx+dy*dy+dz*dz <= originWarnDistSq {
+		return
+	}
+	s.spawnWarnOnce.Do(func() {
+		log.Printf("WARNING: %s spawned at (%.1f, %.1f, %.1f) but its trace was "+
+			"captured at (%.1f, %.1f, %.1f), %.0f blocks away. Block events will be "+
+			"out of range and do nothing. Run bench-playerdata against this server's "+
+			"world with the server stopped, before every run.",
+			s.Username, x, y, z, s.Origin.X, s.Origin.Y, s.Origin.Z,
+			math.Sqrt(dx*dx+dy*dy+dz*dz))
+	})
+}
+
+// originWarnDistSq is the squared distance beyond which a spawn is reported as
+// misplaced. Interaction range is about 4.5 blocks, so 16 (4 blocks) is inside
+// it: anything further and the trace's block events are already unreliable.
+const originWarnDistSq = 16.0

@@ -293,11 +293,17 @@ func removeAll(playerDir, prefix string, count int) {
 		if len(name) > 16 {
 			name = name[:16]
 		}
-		path := filepath.Join(playerDir, formatUUID(mcproto.OfflineUUID(name))+".dat")
-		if err := os.Remove(path); err == nil {
-			removed++
-		} else if !os.IsNotExist(err) {
-			log.Printf("remove %s: %v", path, err)
+		base := filepath.Join(playerDir, formatUUID(mcproto.OfflineUUID(name)))
+		// The .dat_old backup has to go too. The server keeps it as a fallback
+		// and reads it when the .dat is missing, so deleting only the .dat
+		// silently resurrects the previous position — observed on Paper 26.1.2,
+		// where a bot kept spawning at a removed origin.
+		for _, path := range []string{base + ".dat", base + ".dat_old"} {
+			if err := os.Remove(path); err == nil {
+				removed++
+			} else if !os.IsNotExist(err) {
+				log.Printf("remove %s: %v", path, err)
+			}
 		}
 	}
 	log.Printf("removed %d player data file(s) from %s", removed, playerDir)

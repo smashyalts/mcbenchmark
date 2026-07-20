@@ -64,8 +64,13 @@ func (r *Runner) Run() error {
 			case <-t.C:
 				r.coll.TakeSample()
 				a := &r.coll.Agg
-				log.Printf("active=%d connected=%d failed=%d events=%d",
-					a.Active.Load(), a.Connected.Load(), a.Failed.Load(), a.EventsReplayed.Load())
+				digs := ""
+				if sent := a.DigsSent.Load(); sent > 0 {
+					digs = fmt.Sprintf(" digs=%d/%d", a.DigsConfirmed.Load(), sent)
+				}
+				log.Printf("active=%d connected=%d failed=%d events=%d%s",
+					a.Active.Load(), a.Connected.Load(), a.Failed.Load(),
+					a.EventsReplayed.Load(), digs)
 			}
 		}
 	}()
@@ -183,6 +188,7 @@ func (r *Runner) buildSession(idx int, target string, deadline time.Time, perSes
 		PlayFor:      playFor,
 		EnableFlight: sc.Client.EnableFlight,
 		LoopTrace:    sc.Traces.ReusePolicy != "once",
+		Origin:       tr.Origin,
 		agg:          &r.coll.Agg,
 		coll:         r.coll,
 	}

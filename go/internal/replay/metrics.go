@@ -27,6 +27,13 @@ type Aggregate struct {
 	// too (a replayed command, a portal), so this is the honest count of how far
 	// the replay's world diverged from the capture's.
 	RelocationsUnreproduced atomic.Int64
+	// DigsSent / DigsConfirmed measure whether the world actually changed.
+	// Sending a dig proves nothing: the server drops one that is out of range or
+	// aimed at air, and "events replayed" counts it regardless. DigsConfirmed
+	// counts the block_update packets the server sent back showing the block
+	// gone, so a run that broke nothing reads as 0 instead of looking successful.
+	DigsSent      atomic.Int64
+	DigsConfirmed atomic.Int64
 }
 
 // Sample is one point of the concurrency time series.
@@ -67,6 +74,8 @@ type Report struct {
 	EventsReplayed          int64           `json:"events_replayed"`
 	EventsSkipped           int64           `json:"events_skipped"`
 	RelocationsUnreproduced int64           `json:"relocations_unreproduced"`
+	DigsSent                int64           `json:"digs_sent"`
+	DigsConfirmed           int64           `json:"digs_confirmed"`
 	PacketsSent             int64           `json:"packets_sent"`
 	BytesIn                 int64           `json:"bytes_in"`
 	BytesOut                int64           `json:"bytes_out"`
@@ -127,6 +136,8 @@ func (c *Collector) WriteReport(dir, scenarioName, target string, protocol, targ
 		EventsReplayed:          c.Agg.EventsReplayed.Load(),
 		EventsSkipped:           c.Agg.EventsSkipped.Load(),
 		RelocationsUnreproduced: c.Agg.RelocationsUnreproduced.Load(),
+		DigsSent:                c.Agg.DigsSent.Load(),
+		DigsConfirmed:           c.Agg.DigsConfirmed.Load(),
 		PacketsSent:             c.Agg.PacketsSent.Load(),
 		BytesIn:                 c.Agg.BytesIn.Load(),
 		BytesOut:                c.Agg.BytesOut.Load(),

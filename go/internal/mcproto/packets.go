@@ -343,3 +343,43 @@ func ParseKeepAlive(body []byte) (int64, error) {
 func ParsePing(body []byte) (int32, error) {
 	return mcwire.NewReader(body).Int32BE()
 }
+
+// BlockUpdate is the clientbound block_update packet: a position and the block
+// state now there.
+type BlockUpdate struct {
+	X, Y, Z int32
+	StateID int32
+}
+
+// AirStateID is the global block-state id of minecraft:air, which is always 0.
+// A block_update carrying it at a position we dug is the server confirming the
+// block is gone.
+const AirStateID int32 = 0
+
+// ParseBlockUpdate decodes a clientbound block_update body.
+func ParseBlockUpdate(body []byte) (BlockUpdate, error) {
+	var b BlockUpdate
+	r := mcwire.NewReader(body)
+	packed, err := r.Int64BE()
+	if err != nil {
+		return b, err
+	}
+	b.X, b.Y, b.Z = unpackBlockPos(packed)
+	b.StateID, err = r.VarInt()
+	return b, err
+}
+
+// unpackBlockPos reverses blockPos. Each field is sign-extended from its own
+// width: x and z are 26-bit, y is 12-bit, and treating them as unsigned would
+// put every negative coordinate tens of millions of blocks away.
+func unpackBlockPos(v int64) (x, y, z int32) {
+	x = int32(signExtend(v>>38, 26))
+	z = int32(signExtend((v>>12)&0x3FFFFFF, 26))
+	y = int32(signExtend(v&0xFFF, 12))
+	return
+}
+
+func signExtend(v int64, bits uint) int64 {
+	shift := 64 - bits
+	return (v << shift) >> shift
+}
