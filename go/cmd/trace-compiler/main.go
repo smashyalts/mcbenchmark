@@ -176,6 +176,7 @@ func main() {
 	traceNum := 0
 	dropped := 0
 	sessionCount := 0
+	noOrigin := 0
 
 	// Pass 2: one bucket at a time, so only that bucket's sessions are resident.
 	for i := 0; i < buckets; i++ {
@@ -224,7 +225,11 @@ func main() {
 				WorldProfileID:  *worldProfile,
 				TraceID:         fmt.Sprintf("%s-%06d", *runID, traceNum),
 				DurationUs:      durUs,
+				Origin:          resolveOrigin(evs),
 				Events:          tevs,
+			}
+			if t.Origin == nil {
+				noOrigin++
 			}
 			if err := t.Write(filepath.Join(*output, name)); err != nil {
 				log.Fatalf("write %s: %v", name, err)
@@ -238,6 +243,16 @@ func main() {
 		}
 	}
 	log.Printf("found %d sessions", sessionCount)
+	if noOrigin > 0 {
+		// Not fatal, but the user has to know: bench-playerdata cannot place a
+		// bot for these, so they log in at world spawn — out of reach of any
+		// block their trace touches.
+		log.Printf("WARNING: %d of %d traces carry no origin; their bots will spawn "+
+			"at world spawn unless bench-playerdata is given --origin. Captures "+
+			"taken before the session_start position was added only resolve an "+
+			"origin if the session dug or placed a block.",
+			noOrigin, len(manifest.Traces))
+	}
 
 	if len(manifest.Traces) == 0 {
 		log.Fatalf("no sessions passed the filters (min-duration=%ds); nothing written", *minDuration)
@@ -271,4 +286,66 @@ func classify(counts map[int32]int, total int) []string {
 		tags = append(tags, "mixed")
 	}
 	return tags
+}
+
+// resolveOrigin works out where the captured player stood, so bench-playerdata
+// can put the replay bot there before it ever connects.
+//
+// A bot cannot choose its own spawn: the server does, and a bot that lands at
+// world spawn is out of interaction range of every block its trace digs or
+// places (so those events do nothing), and hovers in mid-air if spawn is not
+// solid ground — which the server kills with a "flying is not enabled" kick
+// after four seconds.
+//
+// Sources, best first:
+//
+//  1. The session_start marker's position. Exact, and what every capture taken
+//     after that field was added will have.
+//  2. The first block the session dug or placed. A player who broke a block was
+//     within interaction range of it, so standing on top of it is guaranteed to
+//     put the bot in range. Assumes the space above that block is passable,
+//     which is nearly always true of a block someone reached to mine.
+//  3. Nothing. The event header stores only a coarse chunk — 64 blocks wide,
+//     with no Y at all — which is not close enough to stand on. Guessing a Y
+//     would drop the bot inside stone or leave it hovering, both worse than
+//     leaving it at spawn where the operator can see the problem.
+func resolveOrigin(evs []rawevent.RawEvent) *tracefile.Origin {
+	for _, e := range evs {
+		if e.Kind != rawevent.KindMarker {
+			continue
+		}
+		m, err := rawevent.DecodeMarkerAt(e.Payload)
+		if err != nil || !m.HasPos || m.Marker != "session_start" {
+			continue
+		}
+		return &tracefile.Origin{
+			X: m.X, Y: m.Y, Z: m.Z, Yaw: m.Yaw, Pitch: m.Pitch,
+			Dimension: e.DimensionID, Exact: true,
+		}
+	}
+	for _, e := range evs {
+		var x, y, z int32
+		switch e.Kind {
+		case rawevent.KindDig:
+			d, err := rawevent.DecodeDig(e.Payload)
+			if err != nil {
+				continue
+			}
+			x, y, z = d.X, d.Y, d.Z
+		case rawevent.KindPlaceBlock:
+			p, err := rawevent.DecodePlace(e.Payload)
+			if err != nil {
+				continue
+			}
+			x, y, z = p.X, p.Y, p.Z
+		default:
+			continue
+		}
+		// Block centre in X/Z, standing on top of it in Y.
+		return &tracefile.Origin{
+			X: float64(x) + 0.5, Y: float64(y) + 1, Z: float64(z) + 0.5,
+			Dimension: e.DimensionID, Exact: true,
+		}
+	}
+	return nil
 }

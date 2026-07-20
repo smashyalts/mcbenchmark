@@ -291,6 +291,59 @@ func DecodeMarker(p []byte) (string, error) {
 	return r.String()
 }
 
+// MarkerPayload is a marker plus the exact position it was recorded at, which
+// only session_start carries. HasPos is false for plain markers and for
+// captures written before the position was added — the trailing fields are
+// optional precisely so old files still decode.
+type MarkerPayload struct {
+	Marker     string
+	HasPos     bool
+	X, Y, Z    float64
+	Yaw, Pitch float32
+}
+
+// DecodeMarkerAt decodes a marker with its optional position.
+func DecodeMarkerAt(p []byte) (MarkerPayload, error) {
+	var m MarkerPayload
+	r := mcwire.NewReader(p)
+	var err error
+	if m.Marker, err = r.String(); err != nil {
+		return m, err
+	}
+	if r.Remaining() == 0 {
+		return m, nil
+	}
+	if m.X, err = r.Float64BE(); err != nil {
+		return m, err
+	}
+	if m.Y, err = r.Float64BE(); err != nil {
+		return m, err
+	}
+	if m.Z, err = r.Float64BE(); err != nil {
+		return m, err
+	}
+	if m.Yaw, err = r.Float32BE(); err != nil {
+		return m, err
+	}
+	if m.Pitch, err = r.Float32BE(); err != nil {
+		return m, err
+	}
+	m.HasPos = true
+	return m, nil
+}
+
+// EncodeMarkerAt mirrors the Java Payloads.markerAt encoding.
+func EncodeMarkerAt(marker string, x, y, z float64, yaw, pitch float32) []byte {
+	w := mcwire.NewWriter()
+	w.String(marker)
+	w.Float64BE(x)
+	w.Float64BE(y)
+	w.Float64BE(z)
+	w.Float32BE(yaw)
+	w.Float32BE(pitch)
+	return w.Bytes()
+}
+
 // CreativeSetPayload is the decoded KindCreativeSet payload.
 type CreativeSetPayload struct {
 	Slot   int32

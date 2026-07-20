@@ -7,6 +7,9 @@
 //	  world_profile String
 //	  trace_id String
 //	  duration_us VarLong
+//	  [schema >= 2] origin: has_origin Bool
+//	                        if set: x,y,z Float64BE, yaw,pitch Float32BE,
+//	                                dimension VarInt, exact Bool
 //	  event_count VarInt
 //	  events: [delta_offset_us VarLong][kind VarInt][data_len VarInt][data]
 //
@@ -29,12 +32,34 @@ import (
 
 var magic = []byte("MCT1")
 
-const SchemaVersion = 1
+// SchemaVersion 2 added the session origin. Version 1 files still read: they
+// simply carry no origin, and every consumer treats that as "unknown".
+const SchemaVersion = 2
 
 type TraceEvent struct {
 	OffsetUs int64
 	Kind     int32
 	Data     []byte
+}
+
+// Origin is where the captured player stood when the session began.
+//
+// Replay bots cannot choose their own spawn — the server decides, and without
+// this a bot lands at world spawn: out of interaction range of every block its
+// trace digs or places, and (unless world spawn happens to be solid ground)
+// kicked for "flying" after four seconds of hovering. bench-playerdata writes
+// this position into each bench account's player data so the bot is already in
+// the captured region the moment it logs in.
+//
+// Exact is false when the position was inferred rather than captured — from a
+// block the player interacted with, or from the coarse chunk stamped on every
+// event. Inferred origins are good enough to put a bot in the right region;
+// only an exact one guarantees interaction range.
+type Origin struct {
+	X, Y, Z    float64
+	Yaw, Pitch float32
+	Dimension  int32
+	Exact      bool
 }
 
 type Trace struct {
@@ -43,7 +68,10 @@ type Trace struct {
 	WorldProfileID  string
 	TraceID         string
 	DurationUs      int64
-	Events          []TraceEvent
+	// Origin is nil when the trace predates schema 2 or the compiler could not
+	// resolve a position.
+	Origin *Origin
+	Events []TraceEvent
 }
 
 // Write serializes and writes the trace to path.
@@ -54,6 +82,26 @@ func (t *Trace) Write(path string) error {
 	w.String(t.WorldProfileID)
 	w.String(t.TraceID)
 	w.VarLong(t.DurationUs)
+	// The origin block belongs to schema 2 onwards. Writing it under a schema-1
+	// header would produce a file whose declared version does not match its
+	// layout, and every reader would then mis-parse the event list.
+	if t.SchemaVersion < 2 {
+		if t.Origin != nil {
+			return fmt.Errorf("trace %s: origin requires schema >= 2, have %d",
+				t.TraceID, t.SchemaVersion)
+		}
+	} else if t.Origin != nil {
+		w.Bool(true)
+		w.Float64BE(t.Origin.X)
+		w.Float64BE(t.Origin.Y)
+		w.Float64BE(t.Origin.Z)
+		w.Float32BE(t.Origin.Yaw)
+		w.Float32BE(t.Origin.Pitch)
+		w.VarInt(t.Origin.Dimension)
+		w.Bool(t.Origin.Exact)
+	} else {
+		w.Bool(false)
+	}
 	w.VarInt(int32(len(t.Events)))
 	prev := int64(0)
 	for _, e := range t.Events {
@@ -95,7 +143,10 @@ func Read(path string) (*Trace, error) {
 		return nil, fmt.Errorf("%s: schema: %w", path, err)
 	}
 	t.SchemaVersion = uint32(sv)
-	if t.SchemaVersion != SchemaVersion {
+	// Schema 1 traces stay readable: they predate the origin field and are
+	// otherwise byte-identical. Refusing them would strand every trace compiled
+	// before this change for no reason.
+	if t.SchemaVersion < 1 || t.SchemaVersion > SchemaVersion {
 		return nil, fmt.Errorf("%s: unsupported trace schema %d", path, t.SchemaVersion)
 	}
 	pv, err := r.VarInt()
@@ -111,6 +162,37 @@ func Read(path string) (*Trace, error) {
 	}
 	if t.DurationUs, err = r.VarLong(); err != nil {
 		return nil, err
+	}
+	if t.SchemaVersion >= 2 {
+		has, err := r.Bool()
+		if err != nil {
+			return nil, fmt.Errorf("%s: origin flag: %w", path, err)
+		}
+		if has {
+			o := &Origin{}
+			if o.X, err = r.Float64BE(); err != nil {
+				return nil, err
+			}
+			if o.Y, err = r.Float64BE(); err != nil {
+				return nil, err
+			}
+			if o.Z, err = r.Float64BE(); err != nil {
+				return nil, err
+			}
+			if o.Yaw, err = r.Float32BE(); err != nil {
+				return nil, err
+			}
+			if o.Pitch, err = r.Float32BE(); err != nil {
+				return nil, err
+			}
+			if o.Dimension, err = r.VarInt(); err != nil {
+				return nil, err
+			}
+			if o.Exact, err = r.Bool(); err != nil {
+				return nil, err
+			}
+			t.Origin = o
+		}
 	}
 	n, err := r.VarInt()
 	if err != nil {

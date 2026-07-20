@@ -149,6 +149,21 @@ public final class ByteWriter {
         buf[len++] = (byte) ((bits >>> 24) & 0xFF);
     }
 
+    /**
+     * Big-endian float32/float64, used by the session_start marker's position.
+     *
+     * Movement payloads use little-endian floats; these two are big-endian to
+     * match the trace file's origin fields, which the compiler copies straight
+     * across. See docs/FORMAT.md.
+     */
+    public void float32BE(float f) {
+        int32BE(Float.floatToIntBits(f));
+    }
+
+    public void float64BE(double d) {
+        int64BE(Double.doubleToLongBits(d));
+    }
+
     /** VarInt length prefix followed by UTF-8 bytes. */
     public void string(String s) {
         byte[] b = s.getBytes(StandardCharsets.UTF_8);

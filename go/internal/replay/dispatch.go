@@ -66,6 +66,25 @@ func (s *Session) dispatch(e tracefile.TraceEvent) {
 			handled = false
 			break
 		}
+		// A dig is a sequence, not a single packet, and capture can only see the
+		// end of it: BlockBreakEvent fires when the block is already gone, so
+		// every captured dig carries action=finish and nothing else.
+		//
+		// Replaying that finish on its own breaks nothing. The vanilla server
+		// accepts STOP_DESTROY_BLOCK only for the position it previously saw a
+		// START_DESTROY_BLOCK for; for any other position it treats the packet as
+		// client desync, re-sends the block state and drops the action. The
+		// result is a player who swings at a block forever while it stays put.
+		//
+		// So synthesise the start the capture could not observe. The server then
+		// runs its real destroy-progress state machine — instant break, or a
+		// delayed destroy that completes over the block's actual hardness — which
+		// is precisely the work a benchmark exists to reproduce.
+		if d.Action == mcproto.DigFinish {
+			_ = s.send(mcproto.SBPlayBlockDig,
+				mcproto.BlockDig(mcproto.DigStart, d.X, d.Y, d.Z, d.Face, s.nextSeq()))
+			_ = s.send(mcproto.SBPlayArmAnimation, mcproto.ArmAnimation(0))
+		}
 		_ = s.send(mcproto.SBPlayBlockDig,
 			mcproto.BlockDig(d.Action, d.X, d.Y, d.Z, d.Face, s.nextSeq()))
 		_ = s.send(mcproto.SBPlayArmAnimation, mcproto.ArmAnimation(0))

@@ -124,4 +124,29 @@ public final class Payloads {
         w.string(marker == null ? "" : marker);
         return w.toByteArray();
     }
+
+    /**
+     * A marker carrying the exact position it was recorded at.
+     *
+     * The event header stores only a coarse chunk (64-block granularity, no Y),
+     * which is deliberate — it keeps events small and avoids logging precise
+     * player tracks. But a replay bot has to be *placed* somewhere before it
+     * connects, and 64 blocks of slop is enough to put it outside interaction
+     * range of everything its trace touches, or inside a wall. So session_start,
+     * and only session_start, records the real position.
+     *
+     * The extra fields are appended after the marker string, so a reader that
+     * predates them stops at the string and sees an ordinary marker.
+     */
+    public static byte[] markerAt(String marker, double x, double y, double z,
+                                  float yaw, float pitch) {
+        ByteWriter w = new ByteWriter();
+        w.string(marker == null ? "" : marker);
+        w.float64BE(x);
+        w.float64BE(y);
+        w.float64BE(z);
+        w.float32BE(yaw);
+        w.float32BE(pitch);
+        return w.toByteArray();
+    }
 }

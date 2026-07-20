@@ -20,6 +20,7 @@ type mockResult struct {
 	flyingPackets  int
 	keepAliveEcho  bool
 	loginName      string
+	digStatuses    []int32
 	err            string
 }
 
@@ -110,6 +111,10 @@ func runMockServer(t *testing.T, ln net.Listener, useCompression bool, out *mock
 			out.movePackets++
 		case mcproto.SBPlayFlying:
 			out.flyingPackets++
+		case mcproto.SBPlayBlockDig:
+			if st, err := mcwireVarInt(body); err == nil {
+				out.digStatuses = append(out.digStatuses, st)
+			}
 		case mcproto.SBPlayKeepAlive:
 			if id64, _ := mcproto.ParseKeepAlive(body); id64 == 0x1234 {
 				out.keepAliveEcho = true
@@ -240,5 +245,59 @@ func TestClientSendsMovementEveryTick(t *testing.T) {
 	// The stationary ticks must be status-only packets, not full positions.
 	if res.flyingPackets == 0 {
 		t.Error("no status-only flying packets sent on idle ticks")
+	}
+}
+
+// TestDigSendsStartBeforeFinish pins the dig packet sequence.
+//
+// Capture sees only the end of a dig (BlockBreakEvent fires once the block is
+// already gone), so every captured dig carries action=finish. The replay used to
+// forward that finish alone, and the vanilla server drops a stop it never saw a
+// start for — the bot swung at the block forever and nothing broke, so a trace
+// full of mining produced none of the block-update, drop-spawn or chunk-save
+// load it was supposed to.
+func TestDigSendsStartBeforeFinish(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	addr := ln.Addr().(*net.TCPAddr)
+
+	var res mockResult
+	done := make(chan struct{})
+	go runMockServer(t, ln, false, &res, done)
+
+	tr := &tracefile.Trace{
+		SchemaVersion: tracefile.SchemaVersion, ProtocolVersion: mcproto.ProtocolDefault,
+		WorldProfileID: "test", TraceID: "dig", DurationUs: 300_000,
+		Events: []tracefile.TraceEvent{
+			{OffsetUs: 100_000, Kind: rawevent.KindDig,
+				Data: rawevent.DigPayload{Action: mcproto.DigFinish,
+					X: 10, Y: 64, Z: -5, Face: 1}.Encode()},
+		},
+	}
+	coll := NewCollector()
+	sess := newTestSession(addr.String(), "127.0.0.1", uint16(addr.Port), tr, coll)
+
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() { defer wg.Done(); sess.Run(stop) }()
+	wg.Wait()
+	close(stop)
+	<-done
+
+	if res.err != "" {
+		t.Fatalf("mock server error: %s", res.err)
+	}
+	want := []int32{mcproto.DigStart, mcproto.DigFinish}
+	if len(res.digStatuses) != len(want) {
+		t.Fatalf("dig statuses = %v, want %v", res.digStatuses, want)
+	}
+	for i, w := range want {
+		if res.digStatuses[i] != w {
+			t.Errorf("dig status[%d] = %d, want %d", i, res.digStatuses[i], w)
+		}
 	}
 }

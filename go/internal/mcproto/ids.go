@@ -99,6 +99,15 @@ const (
 	SBPlayUseItem            int32 = 0x43 // use_item
 )
 
+// Block-dig statuses (serverbound player_action). The server runs a small state
+// machine across them: it only accepts a "stop" for the position it previously
+// saw a "start" for.
+const (
+	DigStart  int32 = 0
+	DigAbort  int32 = 1
+	DigFinish int32 = 2
+)
+
 // Entity action IDs (serverbound player_command).
 const (
 	ActionStartSneak  int32 = 0

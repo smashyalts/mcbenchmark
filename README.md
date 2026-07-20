@@ -28,6 +28,7 @@ regenerating packet IDs (see [docs/PROTOCOL.md](docs/PROTOCOL.md)).
 | **Capture plugin** | `capture-plugin/` | Java 21 (Paper API) | Records events to `raw-*.bin` logs inside the container |
 | **trace-compiler** | `go/cmd/trace-compiler` | Go | Compiles capture logs into per-session traces + manifest |
 | **mc-replay** | `go/cmd/mc-replay` | Go | Replays traces as virtual players against the benchmark server |
+| **bench-playerdata** | `go/cmd/bench-playerdata` | Go | Places bench accounts at their trace's captured position before they log in |
 | **bench-runner** | `host/bench-runner.sh` | bash | Optional orchestrator: wait-for-server → replay → archive |
 
 | **trace-amplify** | `go/cmd/trace-amplify` | Go | Synthesizes many varied sessions from a small real capture (record 5 → replay 1500) |
@@ -52,8 +53,9 @@ The binary formats crossing the Java/Go boundary are specified in
 
 ```bash
 cd go
-go build -o ../bin/trace-compiler ./cmd/trace-compiler
-go build -o ../bin/mc-replay      ./cmd/mc-replay
+go build -o ../bin/trace-compiler   ./cmd/trace-compiler
+go build -o ../bin/mc-replay        ./cmd/mc-replay
+go build -o ../bin/bench-playerdata ./cmd/bench-playerdata
 go build -o ../bin/gen-fixture    ./cmd/gen-fixture
 go build -o ../bin/mock-server    ./cmd/mock-server
 go test ./...
@@ -96,7 +98,31 @@ bin/trace-compiler \
   --min-duration 600 --max-duration 3600 --run-id 2026-07-18-2355
 ```
 
-### 4. Replay (host, against offline-mode benchmark server)
+### 4. Place the bench accounts (benchmark server, stopped)
+
+```bash
+bin/bench-playerdata \
+  --world  /path/to/benchmark-server/world \
+  --manifest host/traces-export/protocol-769/mixed-1h-benchmark/manifest.json \
+  --prefix BENCH_ --count 500      # must match the scenario's target_players
+```
+
+Skipping this step does not fail loudly — it fails quietly, which is worse. A
+bench account that has never logged in spawns at **world spawn**, so:
+
+- every dig and place is out of interaction range and the server drops it, while
+  the run still reports the events as replayed and the world never changes; and
+- if world spawn is not solid ground the bot hovers, and the server kicks it with
+  *"Flying is not enabled on this server"* after four seconds.
+
+Run it with the server **stopped**: Paper reads player data at login and writes
+it back at logout, so a file written under a running server is ignored or
+overwritten. `--remove` deletes the files again; `--dry-run` shows the
+placements without writing. The tool auto-detects where this server version
+keeps player data (`world/players/data` on current versions,
+`world/playerdata` on older ones) and prints which one it chose.
+
+### 5. Replay (host, against offline-mode benchmark server)
 
 Edit a scenario under `host/scenarios/`, then:
 
@@ -149,6 +175,14 @@ machine, in addition to unit/integration tests:
   teleported position and, via replayed creative-set packets, a populated
   **Inventory** (diamonds, diamond blocks, golden apples) — the server even
   awarded the `[Diamonds!]` advancement.
+- **Blocks actually break**: a replayed dig removed the target block, confirmed
+  by `execute if block <pos> minecraft:air` after the run. The A/B is what makes
+  it meaningful — the previous finish-only packet sequence left the block
+  standing (`Test failed`), the start+finish sequence removes it (`Test passed`).
+- **Bots spawn where they were captured**: with `bench-playerdata` run first, the
+  server logged `BENCH_00000 logged in ... at (-904.5, 79.0, -152.5)` — the
+  trace's origin — instead of world spawn, and a dig 100 blocks from spawn then
+  broke its block. Without it, the same trace left the block untouched.
 - **Inventory reproduced with live window IDs**: `INV_CLICK`/`INV_OPEN`/
   `INV_CLOSE` drive Container Click/Open/Close using the window & state ids the
   server assigns at replay time (see [docs/PROTOCOL.md](docs/PROTOCOL.md)).
@@ -176,11 +210,11 @@ bin/mc-replay --scenario host/scenarios/... --out-dir /tmp/run
 
 ### Known limitations (by design)
 
-- Movement is captured per Bukkit event, not per packet — sufficient for load
-  characterization; a packet-level source (ProtocolLib/PacketEvents) can be
-  slotted in behind `CaptureManager` without changing the format. That would also
-  remove the main-thread hop entirely, since Bukkit events can only be received
-  on the main thread.
+- The replay client does not simulate gravity: it sends the positions the trace
+  recorded and never falls on its own. A bot that starts in mid-air stays there
+  and is kicked as "flying" after four seconds. In practice this only bites when
+  a bot is placed badly — see step 4 — because captured movement carries the
+  player's real descent.
 - Real captured survival movement replays faithfully, but synthetic *airborne*
   (creative-flight) travel is throttled by the server's flight anti-cheat — use
   `gen-demo --tp` (operator teleport) to force long-distance chunk generation.

@@ -61,8 +61,18 @@ Reference: Go `internal/rawevent`, Java `com.mcbench.capture.model.RawEvent`.
 | `CMD` | `command` (`String`, includes leading `/`) |
 | `MOB_SPAWN` | `entity_type` (`VarInt`), `tag` (`String`) |
 | `MOB_DESPAWN` | `entity_type` `reason` (2× `VarInt`) |
-| `MARKER` | `marker` (`String`) |
+| `MARKER` | `marker` (`String`), then optionally `x` `y` `z` (3× `Float64BE`) and `yaw` `pitch` (2× `Float32BE`) |
 | `CREATIVE_SET` | `slot` `item_id` `count` (3× `VarInt`) — creative inventory set; server writes the item straight into the slot (replay/demo only) |
+
+Only the `session_start` marker carries the trailing position, and it is the one
+exact position in the whole format — every other event locates itself with the
+header's coarse chunk, which is 64 blocks wide and has no `Y`. The compiler
+turns it into the trace's origin so `bench-playerdata` can place the replay bot
+there before it logs in; see §4.
+
+The position fields are optional so that captures written before they existed
+still decode: a reader that runs out of bytes after the `marker` string has read
+a plain marker, not a truncated one.
 
 ## 3. Capture log file (`raw-*.bin`)
 
@@ -89,11 +99,17 @@ implementations. Reference: Go `internal/rawlog`, Java `CaptureLogWriter`.
 ```
 magic "MCT1" (4 bytes)
 lz4-frame of:
-  schema_version   VarInt   1
+  schema_version   VarInt   2
   protocol_version VarInt
   world_profile    String
   trace_id         String
   duration_us      VarLong
+  has_origin       bool     (schema >= 2 only)
+  if has_origin:
+    x, y, z        3× Float64BE
+    yaw, pitch     2× Float32BE
+    dimension      VarInt   (0 overworld, 1 nether, 2 end — as §1)
+    exact          bool     false if inferred rather than captured
   event_count      VarInt
   repeat event_count times:
     delta_offset_us VarLong  microseconds since previous event
@@ -104,6 +120,25 @@ lz4-frame of:
 
 Trace files are written and read only by Go, so they use LZ4 (`pierrec/lz4`).
 Reference: Go `internal/tracefile`.
+
+Schema 1 files still read; they simply carry no origin. Schema 2 added the
+origin: where the captured player stood when the session began.
+
+The origin exists because a replay bot cannot choose its own spawn — the server
+decides, and for an account that has never logged in that means world spawn.
+Both consequences are silent. Dig and place carry absolute coordinates, so a bot
+at spawn is out of interaction range of every block its trace touches and the
+server drops those actions while the run still counts them as replayed; and a
+bot left hovering because spawn is not solid ground is kicked with "Flying is not
+enabled on this server" after four seconds. `bench-playerdata` writes the origin
+into each bench account's player data so the bot is already in place at login.
+
+The compiler resolves it from, in order: the `session_start` marker's position
+(exact); the first block the session dug or placed, standing on top of it (also
+exact — a player who broke a block was within range of it); or nothing at all.
+There is deliberately no fallback to the header's coarse chunk: 64 blocks of
+slop with no `Y` cannot be stood on, and a guessed `Y` buries the bot in stone or
+leaves it hovering, both worse than an obviously unplaced bot at spawn.
 
 ## 5. Manifest (`manifest.json`)
 

@@ -67,8 +67,12 @@ public final class CaptureListener implements Listener {
         // movement from its own session. The index update, which the packet path
         // does not depend on, goes last.
         mgr.onJoin(p.getUniqueId(), loc, CaptureManager.dimensionId(loc.getWorld()));
+        // The exact position rides along with this marker: it is what
+        // bench-playerdata uses to place the replay bot before it logs in, and
+        // the coarse chunk in the event header is far too imprecise for that.
         mgr.record(p.getUniqueId(), RawEvent.KIND_MARKER,
-                Payloads.marker("session_start"), loc);
+                Payloads.markerAt("session_start", loc.getX(), loc.getY(), loc.getZ(),
+                        loc.getYaw(), loc.getPitch()), loc);
         index.update(p.getUniqueId(), loc.getX(), loc.getY(), loc.getZ());
     }
 
