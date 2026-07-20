@@ -1,0 +1,48 @@
+{
+  "schema_version": 1,
+  "protocol_version": 775,
+  "world_profile": "bench-arena-v1",
+  "run_id": "demo-run",
+  "traces": [
+    {
+      "file": "trace-000001.bin",
+      "duration_s": 1499,
+      "events": 15001,
+      "tags": [
+        "combat",
+        "build",
+        "commands"
+      ]
+    },
+    {
+      "file": "trace-000002.bin",
+      "duration_s": 1499,
+      "events": 15001,
+      "tags": [
+        "combat",
+        "build",
+        "commands"
+      ]
+    },
+    {
+      "file": "trace-000003.bin",
+      "duration_s": 1499,
+      "events": 15001,
+      "tags": [
+        "combat",
+        "build",
+        "commands"
+      ]
+    },
+    {
+      "file": "trace-000004.bin",
+      "duration_s": 1499,
+      "events": 15001,
+      "tags": [
+        "combat",
+        "build",
+        "commands"
+      ]
+    }
+  ]
+}

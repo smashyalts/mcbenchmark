@@ -1,0 +1,53 @@
+# BenchCapture configuration.
+capture:
+  enabled: true
+
+  # Directory for raw-*.bin capture logs. Default matches the Pterodactyl
+  # container working directory layout.
+  output_path: /home/container/bench-capture/capture-logs
+
+  # How often the async writer drains buffers and writes a frame (server ticks;
+  # 20 ticks = 1 second).
+  flush_interval_ticks: 20
+
+  # Number of writer threads. Each owns a disjoint set of sessions and writes
+  # its own raw-*.bin file; trace-compiler reads the whole directory, so the
+  # split is invisible downstream. One thread measured 240,000 events/sec with
+  # zero drops (about 8x what 1500 continuously-moving players generate), so 1
+  # is enough for most deployments. Raise it only if the capture stats line
+  # starts reporting dropped= (a slow or contended disk is the likely cause).
+  writer_threads: 1
+
+  # Per-player in-memory buffer cap. If the writer falls behind and a player's
+  # buffer exceeds this, further events for that player are dropped (and counted)
+  # until it drains, bounding memory use.
+  buffer_per_player_kb: 32
+
+  # Hash player UUIDs with a random per-run salt so raw UUIDs never touch disk.
+  # When false, a fixed (zero) salt is used: ids are still hashed but stable
+  # across runs.
+  anonymize_players: true
+
+  # Capture command lines (EVENT_CMD). Disable for stricter privacy.
+  capture_chat: true
+  max_command_length: 256
+
+  # Optional arena/lobby identifier stored on every event's anchor. Empty = none.
+  region_id: ''
+
+  # File rotation: whichever limit is hit first starts a new file.
+  rotate_minutes: 5
+  rotate_max_mb: 128
+
+  # Retention ceiling for the whole capture directory. On rotate, the oldest
+  # raw-*.bin files are deleted until the total fits. Capture writes about 13
+  # compressed bytes per event, so 1500 players produce roughly 1.4 GB/hour and
+  # 34 GB/day -- without a cap the directory grows until the disk is full, and a
+  # full disk stops the SERVER saving chunks, not just capture. Pruning is
+  # reported in the stats line so lost data is never silent. 0 disables it.
+  max_total_mb: 20480
+
+  # Format schema version and a stable id for this server, written into every
+  # frame header.
+  schema_version: 1
+  server_id: paper-prod-1

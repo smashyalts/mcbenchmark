@@ -1,0 +1,18 @@
+# Build outputs. Everything here is reproducible: `capture-plugin/build.sh`
+# rebuilds the jar and refetches libs/, and `go build ./...` rebuilds bin/.
+bin/
+capture-plugin/out/
+capture-plugin/out-bench/
+capture-plugin/libs/
+capture-plugin/*.jar
+sparkout/
+host/__pycache__/
+
+# Run artifacts and captures. These are outputs of a benchmark, not source, and
+# a real capture is gigabytes.
+host/runs/
+*.bin
+!host/traces-export/**/*.bin
+
+# Machine-local editor/agent settings.
+.claude/settings.local.json

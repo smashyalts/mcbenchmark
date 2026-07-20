@@ -1,0 +1,10 @@
+name: BenchCapture
+version: '1.0.0'
+main: com.mcbench.capture.BenchCapturePlugin
+api-version: '1.21'
+description: Captures player behavior into binary RawEvent logs for benchmark replay.
+author: mcbench
+load: POSTWORLD
+# Movement is captured from serverbound packets on Netty threads, which needs
+# PacketEvents present at load time.
+depend: [packetevents]

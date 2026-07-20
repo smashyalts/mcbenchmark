@@ -1,0 +1,34 @@
+# Small scenario for a quick local smoke test against an offline server.
+name: smoke-local
+
+target:
+  host: 127.0.0.1
+  port: 25565
+
+protocol:
+  version: 775
+
+traces:
+  manifest: ../traces-export/protocol-775/mixed-1h-benchmark/manifest.json
+  selection:
+    strategy: round_robin
+  per_session_minutes: 2
+  reuse_policy: allow_with_jitter
+
+load:
+  target_players: 5
+  ramp:
+    initial_players: 2
+    add_per_second: 1
+    interval_seconds: 2
+
+limits:
+  max_duration_minutes: 3
+  connect_per_second: 10
+
+identity:
+  username_prefix: BENCH_
+  reuse_policy: never_within_run
+
+output:
+  dir: ../runs

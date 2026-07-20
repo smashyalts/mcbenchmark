@@ -1,0 +1,34 @@
+name: 1h-default-benchmark
+
+target:
+  host: 127.0.0.1        # offline-mode Paper benchmark server address
+  port: 25565
+
+protocol:
+  version: 775           # Minecraft 26.1.2
+
+traces:
+  # Path to the compiled trace set copied out of the capture container.
+  manifest: ../traces-export/protocol-775/mixed-1h-benchmark/manifest.json
+  selection:
+    strategy: round_robin   # round_robin | random
+  per_session_minutes: 20   # how long each virtual player replays before looping
+  reuse_policy: allow_with_jitter
+
+load:
+  target_players: 200
+  ramp:
+    initial_players: 20
+    add_per_second: 5
+    interval_seconds: 5
+
+limits:
+  max_duration_minutes: 60
+  connect_per_second: 50
+
+identity:
+  username_prefix: BENCH_
+  reuse_policy: never_within_run
+
+output:
+  dir: ../runs

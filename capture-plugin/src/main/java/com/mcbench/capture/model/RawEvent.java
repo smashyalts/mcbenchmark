@@ -1,0 +1,64 @@
+package com.mcbench.capture.model;
+
+import com.mcbench.capture.io.ByteWriter;
+
+/**
+ * RawEvent is one captured event. Its wire layout is identical to the Go
+ * {@code rawevent.RawEvent} (docs/FORMAT.md section 2.1):
+ *
+ * <pre>
+ *   t_micro        int64 BE
+ *   player_id      32 bytes
+ *   session_seq    VarInt
+ *   dimension_id   VarInt
+ *   coarse_chunk_x VarInt
+ *   coarse_chunk_z VarInt
+ *   region_id      String (VarInt len + UTF-8)
+ *   kind           VarInt
+ *   payload        VarInt len + bytes
+ * </pre>
+ */
+public final class RawEvent {
+    // Event kinds, shared with the Go side.
+    public static final int KIND_MOVE = 0;
+    public static final int KIND_SPRINT_TOGGLE = 1;
+    public static final int KIND_SNEAK_TOGGLE = 2;
+    public static final int KIND_DIG = 3;
+    public static final int KIND_PLACE_BLOCK = 4;
+    public static final int KIND_USE_ITEM = 5;
+    public static final int KIND_INTERACT_ENTITY = 6;
+    public static final int KIND_ATTACK_ENTITY = 7;
+    public static final int KIND_INV_OPEN = 8;
+    public static final int KIND_INV_CLICK = 9;
+    public static final int KIND_INV_CLOSE = 10;
+    public static final int KIND_CMD = 11;
+    public static final int KIND_MOB_SPAWN = 12;
+    public static final int KIND_MOB_DESPAWN = 13;
+    public static final int KIND_MARKER = 14;
+
+    public long tMicro;
+    /** Wall-clock epoch millis, used for frame headers only; NOT encoded. */
+    public long epochMs;
+    public byte[] playerId; // exactly 32 bytes
+    public int sessionSeq;
+    public int dimensionId;
+    public int coarseChunkX;
+    public int coarseChunkZ;
+    public String regionId = "";
+    public int kind;
+    public byte[] payload = new byte[0];
+
+    /** Encodes this event (without the outer per-event length prefix) into w. */
+    public void encode(ByteWriter w) {
+        w.int64BE(tMicro);
+        w.raw(playerId);
+        w.varInt(sessionSeq);
+        w.varInt(dimensionId);
+        w.varInt(coarseChunkX);
+        w.varInt(coarseChunkZ);
+        w.string(regionId == null ? "" : regionId);
+        w.varInt(kind);
+        w.varInt(payload.length);
+        w.raw(payload);
+    }
+}

@@ -1,0 +1,8 @@
+name: ah-list-and-buy
+target: { host: BENCH_HOST, port: 25580 }
+protocol: { version: 775 }
+traces: { manifest: /opt/mc-bench/ah-traces/manifest.json, selection: { strategy: round_robin }, per_session_minutes: 1, reuse_policy: once }
+load: { target_players: 2, ramp: { initial_players: 2, add_per_second: 2, interval_seconds: 1 } }
+limits: { max_duration_minutes: 1, connect_per_second: 10 }
+identity: { username_prefix: DEMO_ }
+output: { dir: /opt/mc-bench/ahruns }
