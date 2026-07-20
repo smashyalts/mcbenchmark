@@ -115,6 +115,14 @@ bench account that has never logged in spawns at **world spawn**, so:
 - if world spawn is not solid ground the bot hovers, and the server kicks it with
   *"Flying is not enabled on this server"* after four seconds.
 
+**If you restore a world backup between runs, restore first and place second.**
+Player data lives *inside* the world folder (`world/players/data`), so rolling
+the world back to a pristine state also deletes the accounts you placed. The bot
+then spawns at world spawn — which in a fresh world is a handful of blocks from
+where the capture happened, close enough to look right on screen and still
+outside the ~4.5 block interaction range. Measured: a bot 6 blocks off broke 0
+of 12 blocks while swinging the whole time.
+
 Run it with the server **stopped, before every run**. Paper reads player data at
 login and writes it back at logout, so a file written under a running server is
 ignored, and after a run each account's data holds wherever that bot finished —
