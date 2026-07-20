@@ -343,6 +343,26 @@ public final class EventRing {
         }
     }
 
+    /**
+     * VarInt-prefixed ASCII string store, truncated to {@code maxBytes}; returns
+     * the new offset.
+     *
+     * Unlike {@link #putString} this allocates nothing: {@code getBytes} would
+     * produce a byte[] per event, and the callers are producer threads where the
+     * whole point is to allocate none. Restricted to ASCII because the only
+     * strings on that path are enum names (spawn reasons, marker labels); any
+     * character above 0x7F is written as '?' rather than silently mis-encoded.
+     */
+    public static int putAscii(byte[] b, int off, String s, int maxBytes) {
+        int n = Math.min(s.length(), maxBytes);
+        off = putVarInt(b, off, n);
+        for (int i = 0; i < n; i++) {
+            char c = s.charAt(i);
+            b[off++] = (byte) (c < 0x80 ? c : '?');
+        }
+        return off;
+    }
+
     /** VarInt-prefixed UTF-8 string store; returns the new offset. */
     public static int putString(byte[] b, int off, String s) {
         byte[] sb = s.getBytes(StandardCharsets.UTF_8);

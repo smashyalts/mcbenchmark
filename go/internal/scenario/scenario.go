@@ -112,5 +112,35 @@ func Load(path string) (*Scenario, error) {
 	default:
 		return nil, fmt.Errorf("%s: unknown selection strategy %q", path, s.Traces.Selection.Strategy)
 	}
+	// Usernames are prefix + a 5-digit index, and Minecraft caps them at 16
+	// characters. A longer prefix used to be truncated silently, which does not
+	// merely rename the bots — it collapses them onto one name. Every session
+	// then logs in as the same player, so the server kicks each new one as a
+	// duplicate login and the run reports a wall of failed sessions with no
+	// stated cause. bench-playerdata truncates identically, so it also writes a
+	// single player data file for accounts that no longer have distinct names.
+	if n := len(s.Identity.UsernamePrefix); n > 11 {
+		return nil, fmt.Errorf("%s: identity.username_prefix %q is %d characters; "+
+			"the 5-digit account index leaves room for 11 (Minecraft's limit is 16)",
+			path, s.Identity.UsernamePrefix, n)
+	}
+	// Negative counts read as "unlimited" nowhere and produce a run that
+	// connects nobody while reporting success.
+	for _, f := range []struct {
+		name string
+		v    int
+	}{
+		{"load.target_players", s.Load.TargetPlayers},
+		{"load.ramp.initial_players", s.Load.Ramp.InitialPlayers},
+		{"load.ramp.add_per_second", s.Load.Ramp.AddPerSecond},
+		{"load.ramp.interval_seconds", s.Load.Ramp.IntervalSeconds},
+		{"limits.max_duration_minutes", s.Limits.MaxDurationMinutes},
+		{"limits.connect_per_second", s.Limits.ConnectPerSecond},
+		{"traces.per_session_minutes", s.Traces.PerSessionMinutes},
+	} {
+		if f.v < 0 {
+			return nil, fmt.Errorf("%s: %s must not be negative (got %d)", path, f.name, f.v)
+		}
+	}
 	return &s, nil
 }

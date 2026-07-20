@@ -98,6 +98,16 @@ bin/trace-compiler \
   --min-duration 600 --max-duration 3600 --run-id 2026-07-18-2355
 ```
 
+A capture file that ends mid-frame — the normal result of killing a server, or
+of a full disk — costs only its own incomplete tail. The compiler keeps every
+complete frame in that file and every other file in the directory, and says what
+it lost:
+
+```
+WARNING: raw-20260720-210921-s0.bin: frame 47: capture file ends mid-frame;
+         keeping the events read before that point
+```
+
 ### 4. Place the bench accounts (benchmark server, stopped)
 
 ```bash
@@ -106,6 +116,13 @@ bin/bench-playerdata \
   --manifest host/traces-export/protocol-769/mixed-1h-benchmark/manifest.json \
   --prefix BENCH_ --count 500      # must match the scenario's target_players
 ```
+
+`--prefix` must match the scenario's `identity.username_prefix` exactly, and both
+cap it at **11 characters** — the account index adds five digits and Minecraft
+stops at sixteen. A longer prefix used to be truncated on both sides, which does
+not rename the accounts so much as merge them: every session logs in as the same
+player, the server kicks each new one as a duplicate login, and the run reports a
+wall of failed sessions with no stated cause. It is now refused up front.
 
 Skipping this step does not fail loudly — it fails quietly, which is worse. A
 bench account that has never logged in spawns at **world spawn**, so:

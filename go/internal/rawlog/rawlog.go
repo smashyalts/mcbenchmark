@@ -17,8 +17,10 @@ import (
 	"bytes"
 	"compress/zlib"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"path/filepath"
 	"sort"
@@ -26,6 +28,27 @@ import (
 	"mcbench/internal/mcwire"
 	"mcbench/internal/rawevent"
 )
+
+// ErrTruncated reports that a capture file ends mid-frame: everything before
+// that point was decoded and delivered, and the tail is unrecoverable.
+//
+// This is the normal way a capture ends. The writer flushes a frame at a time,
+// so killing a server — or losing a container, or filling a disk — mid-write
+// leaves a partial final frame. Treating that as a hard failure threw away the
+// whole file, and StreamDir made it worse by failing the entire directory: one
+// interrupted shutdown cost every trace from every other file and every other
+// player. The complete frames are still perfectly good data, so callers keep
+// them and log what was lost.
+var ErrTruncated = errors.New("capture file ends mid-frame")
+
+// maxFrameLen bounds the frame-length prefix before it is used to allocate.
+//
+// The prefix is the first thing read from each frame, so a partially written
+// or corrupt one is exactly where a garbage value appears — and 0xFFFFFFFF
+// would ask for a 4 GiB allocation before the read that fails. Frames hold one
+// flush interval of events; a megabyte is typical and 256 MiB is far past any
+// real one.
+const maxFrameLen = 256 << 20
 
 type FrameHeader struct {
 	SchemaVersion int32
@@ -176,12 +199,15 @@ func Stream(path string, fn func(rawevent.RawEvent) error) error {
 	for {
 		if _, err := io.ReadFull(br, lenBuf[:]); err != nil {
 			if err == io.EOF {
-				return nil
+				return nil // clean end: a whole number of frames
+			}
+			if err == io.ErrUnexpectedEOF {
+				return fmt.Errorf("%s: frame %d: %w", path, frame, ErrTruncated)
 			}
 			return fmt.Errorf("%s: frame %d length: %w", path, frame, err)
 		}
 		flen := int(binary.BigEndian.Uint32(lenBuf[:]))
-		if flen <= 0 {
+		if flen <= 0 || flen > maxFrameLen {
 			return fmt.Errorf("%s: frame %d invalid length %d", path, frame, flen)
 		}
 		if cap(frameBuf) < flen {
@@ -189,6 +215,9 @@ func Stream(path string, fn func(rawevent.RawEvent) error) error {
 		}
 		buf := frameBuf[:flen]
 		if _, err := io.ReadFull(br, buf); err != nil {
+			if err == io.EOF || err == io.ErrUnexpectedEOF {
+				return fmt.Errorf("%s: frame %d: %w", path, frame, ErrTruncated)
+			}
 			return fmt.Errorf("%s: frame %d truncated (%w)", path, frame, err)
 		}
 		fr := mcwire.NewReader(buf)
@@ -245,10 +274,23 @@ func StreamDir(dir string, fn func(rawevent.RawEvent) error) error {
 	if len(matches) == 0 {
 		return fmt.Errorf("no raw-*.bin files found in %s", dir)
 	}
+	truncated := 0
 	for _, m := range matches {
 		if err := Stream(m, fn); err != nil {
+			// A file cut short still yielded every complete frame in it, and the
+			// other files are untouched. Say so and keep going: the alternative
+			// is discarding a whole capture because one shutdown was not clean.
+			if errors.Is(err, ErrTruncated) {
+				log.Printf("WARNING: %v; keeping the events read before that point", err)
+				truncated++
+				continue
+			}
 			return err
 		}
+	}
+	if truncated > 0 {
+		log.Printf("WARNING: %d of %d capture file(s) ended mid-frame — the server was "+
+			"probably killed while writing. Traces from them stop early.", truncated, len(matches))
 	}
 	return nil
 }

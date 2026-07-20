@@ -107,12 +107,19 @@ func (r *Runner) Run() error {
 		rampStep = sc.Load.TargetPlayers // no ramp: go straight to target
 	}
 
+	// One deadline timer for the ramp. time.After in a select arms a new one per
+	// iteration and each survives until its own deadline, so a long ramp
+	// accumulated a live timer per tick. The one-shot selects further down are
+	// not in a loop and can keep using time.After.
+	endTimer := time.NewTimer(time.Until(deadline))
+	defer endTimer.Stop()
+
 rampLoop:
 	for launched < sc.Load.TargetPlayers {
 		select {
 		case <-rampTicker.C:
 			launch(rampStep)
-		case <-time.After(time.Until(deadline)):
+		case <-endTimer.C:
 			break rampLoop
 		}
 	}
@@ -173,10 +180,11 @@ func (r *Runner) buildSession(idx int, target string, deadline time.Time, perSes
 		playFor += jitter
 	}
 
+	// Fits 16 characters by construction: scenario.Load caps the prefix at 11.
+	// It must not be truncated here — truncation collapses accounts onto one
+	// name, and bench-playerdata would then have written player data for a
+	// username that no longer exists.
 	username := fmt.Sprintf("%s%05d", sc.Identity.UsernamePrefix, idx)
-	if len(username) > 16 {
-		username = username[:16] // Minecraft username limit
-	}
 	return &Session{
 		ID:           fmt.Sprintf("s%05d", idx),
 		Username:     username,

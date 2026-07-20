@@ -290,9 +290,14 @@ func (s *Session) holdUntil(t, deadline time.Time, stop, readerDone <-chan struc
 	}
 	ticker := time.NewTicker(50 * time.Millisecond)
 	defer ticker.Stop()
+	// One timer for the whole wait. time.After inside the select would arm a
+	// fresh one every tick, each held alive until its own full deadline — 20 per
+	// second per session, and none of them collectable early.
+	done := time.NewTimer(time.Until(t))
+	defer done.Stop()
 	for {
 		select {
-		case <-time.After(time.Until(t)):
+		case <-done.C:
 			return
 		case <-stop:
 			return

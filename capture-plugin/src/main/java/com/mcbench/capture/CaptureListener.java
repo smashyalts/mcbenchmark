@@ -84,7 +84,7 @@ public final class CaptureListener implements Listener {
         mgr.record(p.getUniqueId(), RawEvent.KIND_MARKER,
                 Payloads.markerAt("session_start", loc.getX(), loc.getY(), loc.getZ(),
                         loc.getYaw(), loc.getPitch()), loc);
-        index.update(p.getUniqueId(), loc.getX(), loc.getY(), loc.getZ());
+        index.add(p.getUniqueId(), loc.getX(), loc.getY(), loc.getZ());
         recordInventory(p, loc);
     }
 
@@ -331,9 +331,11 @@ public final class CaptureListener implements Listener {
         if (near == null) {
             return;
         }
-        mgr.record(near, RawEvent.KIND_MOB_SPAWN,
-                Payloads.mobSpawn(ent.getType().ordinal(), e.getSpawnReason().name()),
-                at);
+        // Allocation-free path: mob spawn rate is set by farms and spawners, not
+        // by players, so this is the one main-thread kind that can arrive in
+        // floods. See CaptureManager.recordMobEvent.
+        mgr.recordMobEvent(near, RawEvent.KIND_MOB_SPAWN, ent.getType().ordinal(),
+                e.getSpawnReason().name(), at);
     }
 
     @EventHandler(priority = EventPriority.MONITOR)
@@ -344,7 +346,6 @@ public final class CaptureListener implements Listener {
         if (near == null) {
             return;
         }
-        mgr.record(near, RawEvent.KIND_MOB_DESPAWN,
-                Payloads.mobDespawn(ent.getType().ordinal(), 0), at);
+        mgr.recordMobEvent(near, RawEvent.KIND_MOB_DESPAWN, ent.getType().ordinal(), null, at);
     }
 }

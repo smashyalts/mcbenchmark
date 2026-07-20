@@ -69,6 +69,13 @@ func main() {
 		flag.Usage()
 		os.Exit(2)
 	}
+	// Same limit the scenario loader enforces, and for the same reason: a longer
+	// prefix used to be truncated, which collapses every account onto one name
+	// so this writes a single file and the bots all fail to log in as duplicates.
+	if n := len(*prefix); n > 11 {
+		log.Fatalf("--prefix %q is %d characters; the 5-digit account index leaves "+
+			"room for 11 (Minecraft's username limit is 16)", *prefix, n)
+	}
 	playerDir := *dirFlag
 	if playerDir == "" {
 		playerDir = playerDataDir(*world)
@@ -126,11 +133,6 @@ func main() {
 	written, skipped, inexact, imported := 0, 0, 0, 0
 	for i := 0; i < *count; i++ {
 		name := fmt.Sprintf("%s%05d", *prefix, i)
-		if len(name) > 16 {
-			// Matches the runner's truncation, or the file would be written for
-			// a username no bot ever logs in as.
-			name = name[:16]
-		}
 		o := fallback
 		if len(origins) > 0 {
 			if t := origins[i%len(origins)]; t != nil {
@@ -402,9 +404,6 @@ func removeAll(playerDir, prefix string, count int) {
 	removed := 0
 	for i := 0; i < count; i++ {
 		name := fmt.Sprintf("%s%05d", prefix, i)
-		if len(name) > 16 {
-			name = name[:16]
-		}
 		base := filepath.Join(playerDir, formatUUID(mcproto.OfflineUUID(name)))
 		// The .dat_old backup has to go too. The server keeps it as a fallback
 		// and reads it when the .dat is missing, so deleting only the .dat

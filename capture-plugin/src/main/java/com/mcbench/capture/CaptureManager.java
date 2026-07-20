@@ -375,6 +375,55 @@ public final class CaptureManager {
         recordedTotal.increment();
     }
 
+    /**
+     * Allocation-free capture of a mob spawn or death, on the main thread.
+     *
+     * These are the only remaining main-thread kinds whose rate is not bounded by
+     * player behaviour. A spawner farm, a raid or a mob grinder produces hundreds
+     * of {@code CreatureSpawnEvent}s a second regardless of how many players are
+     * online, and the generic {@link #record} path builds the payload before the
+     * ring is asked whether it has room — so on a busy server the main thread was
+     * allocating a ByteWriter, its backing array, a byte[] for the reason string
+     * and a trimmed copy, per event, for events that were then dropped. Garbage
+     * on the main thread is worse than it looks: a young GC is stop-the-world, so
+     * it pauses the tick this plugin exists not to disturb.
+     *
+     * Here the slot is claimed first, so a full ring costs a comparison and
+     * nothing else, and the payload is written straight into it.
+     *
+     * @param tag spawn reason for a spawn event, or null for a death (which
+     *            encodes a numeric reason instead, matching Payloads.mobDespawn)
+     */
+    public void recordMobEvent(UUID uuid, int kind, int entityType, String tag, Location loc) {
+        PlayerSession s = sessions.get(uuid);
+        if (s == null) {
+            return;
+        }
+        EventRing ring = s.mainRing();
+        if (!ring.claimProducer(Thread.currentThread())) {
+            offThreadDropped.increment();
+            return;
+        }
+        long seq = ring.claim();
+        if (seq < 0) {
+            return; // ring full; already counted as dropped, and nothing allocated
+        }
+        byte[] buf = ring.buffer();
+        int start = ring.payloadOffset(seq);
+        int off = EventRing.putVarInt(buf, start, entityType);
+        if (tag == null) {
+            off = EventRing.putVarInt(buf, off, 0); // despawn reason
+        } else {
+            // Bounded so the payload cannot run past its slot into the next one.
+            // Spawn reasons are short enum names; the cap never bites in practice.
+            off = EventRing.putAscii(buf, off, tag,
+                    EventRing.INLINE_PAYLOAD - (off - start) - 5);
+        }
+        writeHeader(ring, seq, loc, kind, off - start);
+        ring.publish(seq);
+        recordedTotal.increment();
+    }
+
     private void writeHeader(EventRing ring, long seq, Location loc, int kind, int payloadLen) {
         int dim = 0;
         int ccx = 0;
