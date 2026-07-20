@@ -2,10 +2,40 @@
 
 Optional, opt-in. Drop a directory into `<server>/world/datapacks/` and restart.
 
-## no-locator-bar
+## no-locator-bar — DOES NOT WORK YET
 
-Stops players transmitting locator-bar waypoints, by zeroing the
+**Status: unverified. The pack loads but its function does not register**, so
+this currently does nothing. Do not rely on it. Left in the tree because the
+findings below are verified and the remaining gap is small.
+
+Intent: stop players transmitting locator-bar waypoints by zeroing the
 `minecraft:waypoint_transmit_range` attribute every tick.
+
+What is verified:
+
+- **There is no `locatorBar` gamerule on Paper 26.1.2.** `gamerule locatorBar`
+  is rejected by the command parser, and no string matching `locator` exists
+  anywhere in the server jars.
+- **`minecraft:waypoint_transmit_range` is a real attribute.** Contrast the two
+  responses: that name returns "No entity was found" (valid, nothing selected),
+  while `minecraft:bogus_attribute_xyz` returns "Can't find element ... of type
+  'minecraft:attribute'".
+- The waypoint system is what falls over under load — see the watchdog stack
+  below.
+
+What does not work: Paper reports `Unknown function bench:tick` after reload.
+Tried `data/<ns>/function/` and `data/<ns>/functions/`, and `pack_format` 81 and
+101 with and without `min_format`/`max_format`. The tag *is* read from this pack
+(an earlier reload reported `Couldn't load tag minecraft:tick as it is missing
+following references: bench:tick`), so the pack is being scanned but functions
+are not being picked up. The remaining unknown is this version's expected
+data-pack layout.
+
+Until that is settled, the attribute can be applied by hand per player:
+
+```
+attribute <player> minecraft:waypoint_transmit_range base set 0
+```
 
 **Why it exists.** On Paper 26.1.2, `ServerWaypointManager.updateWaypoint` is
 the first thing to fall over under player load. Every accepted movement packet
