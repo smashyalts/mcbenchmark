@@ -35,6 +35,19 @@ public final class RawEvent {
     public static final int KIND_MOB_SPAWN = 12;
     public static final int KIND_MOB_DESPAWN = 13;
     public static final int KIND_MARKER = 14;
+    public static final int KIND_CREATIVE_SET = 15;
+    /**
+     * An absolute position the server put the player at, breaking the delta
+     * chain: teleport, respawn, or world change.
+     *
+     * Movement is stored as deltas, which only stays correct while the player
+     * moves continuously. The moment the server relocates them, every later
+     * delta is measured from the new spot but replayed from the old one, so the
+     * bot's absolute position is wrong for the rest of the session — and since
+     * dig and place carry absolute coordinates, every block event after the
+     * teleport lands somewhere the bot is not.
+     */
+    public static final int KIND_REANCHOR = 16;
 
     public long tMicro;
     /** Wall-clock epoch millis, used for frame headers only; NOT encoded. */

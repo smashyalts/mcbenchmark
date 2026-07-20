@@ -115,10 +115,11 @@ bench account that has never logged in spawns at **world spawn**, so:
 - if world spawn is not solid ground the bot hovers, and the server kicks it with
   *"Flying is not enabled on this server"* after four seconds.
 
-Run it with the server **stopped**: Paper reads player data at login and writes
-it back at logout, so a file written under a running server is ignored or
-overwritten. `--remove` deletes the files again; `--dry-run` shows the
-placements without writing. The tool auto-detects where this server version
+Run it with the server **stopped, before every run**. Paper reads player data at
+login and writes it back at logout, so a file written under a running server is
+ignored, and after a run each account's data holds wherever that bot finished —
+the next run would start from there instead of the captured origin. `--remove`
+deletes the files again; `--dry-run` shows the placements without writing. The tool auto-detects where this server version
 keeps player data (`world/players/data` on current versions,
 `world/playerdata` on older ones) and prints which one it chose.
 
@@ -179,6 +180,10 @@ machine, in addition to unit/integration tests:
   by `execute if block <pos> minecraft:air` after the run. The A/B is what makes
   it meaningful — the previous finish-only packet sequence left the block
   standing (`Test failed`), the start+finish sequence removes it (`Test passed`).
+- **Teleports don't corrupt the delta chain**: a bot was captured, `/tp`'d 1700
+  blocks mid-session, and the capture recorded one `REANCHOR` at exactly the
+  destination the server reported — with the largest movement delta in the whole
+  file still 0.35 blocks, i.e. no bogus jump leaked into the movement stream.
 - **Bots spawn where they were captured**: with `bench-playerdata` run first, the
   server logged `BENCH_00000 logged in ... at (-904.5, 79.0, -152.5)` — the
   trace's origin — instead of world spawn, and a dig 100 blocks from spawn then
@@ -210,6 +215,12 @@ bin/mc-replay --scenario host/scenarios/... --out-dir /tmp/run
 
 ### Known limitations (by design)
 
+- Server-initiated teleports can't be forced from the client. Capture records
+  them (`REANCHOR`) and keeps the delta chain correct across them, but a bot
+  claiming a position 1600 blocks away is indistinguishable from cheating and is
+  rejected. The bot follows only if the benchmark server teleports it too — the
+  captured command replaying, or the same portal. Whatever is left is reported as
+  `relocations_unreproduced` in `run.json` rather than silently faked.
 - The replay client does not simulate gravity: it sends the positions the trace
   recorded and never falls on its own. A bot that starts in mid-air stays there
   and is kicked as "flying" after four seconds. In practice this only bites when

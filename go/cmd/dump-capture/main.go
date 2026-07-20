@@ -97,9 +97,6 @@ func describe(e rawevent.RawEvent) string {
 	case rawevent.KindCmd:
 		s, _ := rawevent.DecodeCmd(e.Payload)
 		return fmt.Sprintf("%q", s)
-	case rawevent.KindMarker:
-		s, _ := rawevent.DecodeMarker(e.Payload)
-		return fmt.Sprintf("%q", s)
 	case rawevent.KindInvOpen:
 		o, _ := rawevent.DecodeInvOpen(e.Payload)
 		if o.HasPos {
@@ -120,6 +117,20 @@ func describe(e rawevent.RawEvent) string {
 	case rawevent.KindPlaceBlock:
 		d, _ := rawevent.DecodePlace(e.Payload)
 		return fmt.Sprintf("(%d,%d,%d) face=%d hand=%d", d.X, d.Y, d.Z, d.Face, d.Hand)
+	case rawevent.KindReanchor:
+		a, _ := rawevent.DecodeReanchor(e.Payload)
+		return fmt.Sprintf("-> (%.2f,%.2f,%.2f) yaw=%.1f pitch=%.1f dim=%d",
+			a.X, a.Y, a.Z, a.Yaw, a.Pitch, a.Dimension)
+	case rawevent.KindMarker:
+		m, err := rawevent.DecodeMarkerAt(e.Payload)
+		if err != nil {
+			return "(undecodable marker)"
+		}
+		if m.HasPos {
+			return fmt.Sprintf("%q at (%.2f,%.2f,%.2f) yaw=%.1f pitch=%.1f",
+				m.Marker, m.X, m.Y, m.Z, m.Yaw, m.Pitch)
+		}
+		return fmt.Sprintf("%q", m.Marker)
 	case rawevent.KindAttackEntity:
 		return "swing/attack"
 	default:

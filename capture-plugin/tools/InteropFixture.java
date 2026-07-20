@@ -49,6 +49,12 @@ public final class InteropFixture {
             // Second frame to exercise multi-frame reading.
             List<RawEvent> more = new ArrayList<>();
             more.add(ev(8_000, pid, RawEvent.KIND_MARKER, Payloads.marker("round_end")));
+            // Big-endian doubles/floats: the only place the format uses them,
+            // and the two payloads that decide where a replay bot stands.
+            more.add(ev(9_000, pid, RawEvent.KIND_REANCHOR,
+                    Payloads.reanchor(1600.5, 72.0, -800.25, 90.5f, -12.25f, 1)));
+            more.add(ev(10_000, pid, RawEvent.KIND_MARKER,
+                    Payloads.markerAt("session_start", -804.5, 79.0, -52.25, 45.5f, 3.75f)));
             w.writeFrame(more, 300L, 400L);
         }
         System.out.println("wrote " + outFile);

@@ -2,7 +2,7 @@ package replay
 
 import "mcbench/internal/mcwire"
 
-func varint(v int32) []byte      { return mcwire.AppendVarInt(nil, v) }
+func varint(v int32) []byte                   { return mcwire.AppendVarInt(nil, v) }
 func appendVarInt(dst []byte, v int32) []byte { return mcwire.AppendVarInt(dst, v) }
 
 func appendString(dst []byte, s string) []byte {

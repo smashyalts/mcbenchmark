@@ -20,6 +20,13 @@ type Aggregate struct {
 	BytesIn        atomic.Int64
 	BytesOut       atomic.Int64
 	EventsSkipped  atomic.Int64 // trace events with no replay mapping
+	// RelocationsUnreproduced counts captured teleports too large for a client
+	// to claim. A client cannot teleport itself: a position packet 1600 blocks
+	// away is exactly what an illegal move looks like, and the server rejects it
+	// and rubber-bands. The bot only follows if the benchmark server teleports it
+	// too (a replayed command, a portal), so this is the honest count of how far
+	// the replay's world diverged from the capture's.
+	RelocationsUnreproduced atomic.Int64
 }
 
 // Sample is one point of the concurrency time series.
@@ -38,8 +45,8 @@ type SessionResult struct {
 	Username         string `json:"username"`
 	TraceFile        string `json:"trace_file"`
 	State            string `json:"final_state"`
-	ConnectMs        int64  `json:"connect_ms"`   // dial -> play ready
-	DurationS        int64  `json:"duration_s"`   // play ready -> end
+	ConnectMs        int64  `json:"connect_ms"` // dial -> play ready
+	DurationS        int64  `json:"duration_s"` // play ready -> end
 	EventsReplayed   int64  `json:"events_replayed"`
 	PacketsSent      int64  `json:"packets_sent"`
 	TraceLoops       int    `json:"trace_loops"`
@@ -48,22 +55,23 @@ type SessionResult struct {
 
 // Report is the top-level run output (run.json).
 type Report struct {
-	Scenario       string          `json:"scenario"`
-	Target         string          `json:"target"`
-	Protocol       int             `json:"protocol"`
-	StartedAt      time.Time       `json:"started_at"`
-	FinishedAt     time.Time       `json:"finished_at"`
-	TargetPlayers  int             `json:"target_players"`
-	PeakActive     int64           `json:"peak_active"`
-	Connected      int64           `json:"sessions_connected"`
-	Failed         int64           `json:"sessions_failed"`
-	EventsReplayed int64           `json:"events_replayed"`
-	EventsSkipped  int64           `json:"events_skipped"`
-	PacketsSent    int64           `json:"packets_sent"`
-	BytesIn        int64           `json:"bytes_in"`
-	BytesOut       int64           `json:"bytes_out"`
-	Samples        []Sample        `json:"samples"`
-	Sessions       []SessionResult `json:"sessions"`
+	Scenario                string          `json:"scenario"`
+	Target                  string          `json:"target"`
+	Protocol                int             `json:"protocol"`
+	StartedAt               time.Time       `json:"started_at"`
+	FinishedAt              time.Time       `json:"finished_at"`
+	TargetPlayers           int             `json:"target_players"`
+	PeakActive              int64           `json:"peak_active"`
+	Connected               int64           `json:"sessions_connected"`
+	Failed                  int64           `json:"sessions_failed"`
+	EventsReplayed          int64           `json:"events_replayed"`
+	EventsSkipped           int64           `json:"events_skipped"`
+	RelocationsUnreproduced int64           `json:"relocations_unreproduced"`
+	PacketsSent             int64           `json:"packets_sent"`
+	BytesIn                 int64           `json:"bytes_in"`
+	BytesOut                int64           `json:"bytes_out"`
+	Samples                 []Sample        `json:"samples"`
+	Sessions                []SessionResult `json:"sessions"`
 }
 
 // Collector gathers samples and session results.
@@ -107,22 +115,23 @@ func (c *Collector) WriteReport(dir, scenarioName, target string, protocol, targ
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	rep := Report{
-		Scenario:       scenarioName,
-		Target:         target,
-		Protocol:       protocol,
-		StartedAt:      c.start,
-		FinishedAt:     time.Now(),
-		TargetPlayers:  targetPlayers,
-		PeakActive:     c.peak,
-		Connected:      c.Agg.Connected.Load(),
-		Failed:         c.Agg.Failed.Load(),
-		EventsReplayed: c.Agg.EventsReplayed.Load(),
-		EventsSkipped:  c.Agg.EventsSkipped.Load(),
-		PacketsSent:    c.Agg.PacketsSent.Load(),
-		BytesIn:        c.Agg.BytesIn.Load(),
-		BytesOut:       c.Agg.BytesOut.Load(),
-		Samples:        c.samples,
-		Sessions:       c.sessions,
+		Scenario:                scenarioName,
+		Target:                  target,
+		Protocol:                protocol,
+		StartedAt:               c.start,
+		FinishedAt:              time.Now(),
+		TargetPlayers:           targetPlayers,
+		PeakActive:              c.peak,
+		Connected:               c.Agg.Connected.Load(),
+		Failed:                  c.Agg.Failed.Load(),
+		EventsReplayed:          c.Agg.EventsReplayed.Load(),
+		EventsSkipped:           c.Agg.EventsSkipped.Load(),
+		RelocationsUnreproduced: c.Agg.RelocationsUnreproduced.Load(),
+		PacketsSent:             c.Agg.PacketsSent.Load(),
+		BytesIn:                 c.Agg.BytesIn.Load(),
+		BytesOut:                c.Agg.BytesOut.Load(),
+		Samples:                 c.samples,
+		Sessions:                c.sessions,
 	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err

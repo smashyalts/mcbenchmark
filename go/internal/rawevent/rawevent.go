@@ -29,6 +29,10 @@ const (
 	// KindCreativeSet reproduces a creative-mode inventory set (server writes the
 	// item straight into the slot). Payload: slot, item_id, count (3 VarInts).
 	KindCreativeSet int32 = 15
+	// KindReanchor is an absolute position the server put the player at —
+	// teleport, respawn or world change — which breaks the delta chain movement
+	// is stored as. Replay applies it outright instead of accumulating it.
+	KindReanchor int32 = 16
 )
 
 var kindNames = map[int32]string{
@@ -37,7 +41,7 @@ var kindNames = map[int32]string{
 	KindInteractEntity: "interact_entity", KindAttackEntity: "attack_entity",
 	KindInvOpen: "inv_open", KindInvClick: "inv_click", KindInvClose: "inv_close",
 	KindCmd: "cmd", KindMobSpawn: "mob_spawn", KindMobDespawn: "mob_despawn",
-	KindMarker: "marker",
+	KindMarker: "marker", KindCreativeSet: "creative_set", KindReanchor: "reanchor",
 }
 
 func KindName(k int32) string {
@@ -330,6 +334,48 @@ func DecodeMarkerAt(p []byte) (MarkerPayload, error) {
 	}
 	m.HasPos = true
 	return m, nil
+}
+
+// ReanchorPayload is the decoded KindReanchor payload: an absolute position the
+// server moved the player to.
+type ReanchorPayload struct {
+	X, Y, Z    float64
+	Yaw, Pitch float32
+	Dimension  int32
+}
+
+func (d ReanchorPayload) Encode() []byte {
+	w := mcwire.NewWriter()
+	w.Float64BE(d.X)
+	w.Float64BE(d.Y)
+	w.Float64BE(d.Z)
+	w.Float32BE(d.Yaw)
+	w.Float32BE(d.Pitch)
+	w.VarInt(d.Dimension)
+	return w.Bytes()
+}
+
+func DecodeReanchor(p []byte) (ReanchorPayload, error) {
+	r := mcwire.NewReader(p)
+	var d ReanchorPayload
+	var err error
+	if d.X, err = r.Float64BE(); err != nil {
+		return d, err
+	}
+	if d.Y, err = r.Float64BE(); err != nil {
+		return d, err
+	}
+	if d.Z, err = r.Float64BE(); err != nil {
+		return d, err
+	}
+	if d.Yaw, err = r.Float32BE(); err != nil {
+		return d, err
+	}
+	if d.Pitch, err = r.Float32BE(); err != nil {
+		return d, err
+	}
+	d.Dimension, err = r.VarInt()
+	return d, err
 }
 
 // EncodeMarkerAt mirrors the Java Payloads.markerAt encoding.

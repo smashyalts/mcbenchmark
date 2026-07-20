@@ -173,12 +173,12 @@ func (r *Runner) buildSession(idx int, target string, deadline time.Time, perSes
 		username = username[:16] // Minecraft username limit
 	}
 	return &Session{
-		ID:       fmt.Sprintf("s%05d", idx),
-		Username: username,
-		Trace:    tr,
-		Target:   target,
-		Host:     sc.Target.Host,
-		Port:     uint16(sc.Target.Port),
+		ID:           fmt.Sprintf("s%05d", idx),
+		Username:     username,
+		Trace:        tr,
+		Target:       target,
+		Host:         sc.Target.Host,
+		Port:         uint16(sc.Target.Port),
 		Protocol:     int32(sc.Protocol.Version),
 		PlayFor:      playFor,
 		EnableFlight: sc.Client.EnableFlight,

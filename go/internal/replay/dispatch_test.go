@@ -9,9 +9,9 @@ func TestExpandCommand(t *testing.T) {
 		{"/eco give {SELF} 100000", "DEMO_00007", "eco give DEMO_00007 100000"},
 		{"/ah sell 100", "DEMO_00000", "ah sell 100"},
 		{"/ah", "X", "ah"},
-		{"{SELF} bare", "P", "P bare"},          // no leading slash
+		{"{SELF} bare", "P", "P bare"},               // no leading slash
 		{"/msg {SELF} hi {SELF}", "A", "msg A hi A"}, // multiple tokens
-		{"/", "P", ""},                          // slash only -> empty
+		{"/", "P", ""},                               // slash only -> empty
 		{"", "P", ""},
 	}
 	for _, c := range cases {

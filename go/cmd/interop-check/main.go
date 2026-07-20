@@ -21,8 +21,8 @@ func main() {
 	if err != nil {
 		fail("read: %v", err)
 	}
-	if len(events) != 9 {
-		fail("expected 9 events, got %d", len(events))
+	if len(events) != 11 {
+		fail("expected 11 events, got %d", len(events))
 	}
 
 	pid := sha256.Sum256([]byte("player-uuid-0|salt"))

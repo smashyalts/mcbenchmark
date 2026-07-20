@@ -126,6 +126,24 @@ public final class Payloads {
     }
 
     /**
+     * An absolute position the server moved the player to.
+     *
+     * Same encoding as the session_start marker's position, minus the string:
+     * replay applies it to its view outright instead of accumulating a delta.
+     */
+    public static byte[] reanchor(double x, double y, double z,
+                                  float yaw, float pitch, int dimensionId) {
+        ByteWriter w = new ByteWriter();
+        w.float64BE(x);
+        w.float64BE(y);
+        w.float64BE(z);
+        w.float32BE(yaw);
+        w.float32BE(pitch);
+        w.varInt(dimensionId);
+        return w.toByteArray();
+    }
+
+    /**
      * A marker carrying the exact position it was recorded at.
      *
      * The event header stores only a coarse chunk (64-block granularity, no Y),

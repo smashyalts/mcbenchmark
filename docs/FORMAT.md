@@ -41,7 +41,7 @@ Reference: Go `internal/rawevent`, Java `com.mcbench.capture.model.RawEvent`.
 0 MOVE   1 SPRINT_TOGGLE  2 SNEAK_TOGGLE  3 DIG    4 PLACE_BLOCK
 5 USE_ITEM  6 INTERACT_ENTITY  7 ATTACK_ENTITY  8 INV_OPEN  9 INV_CLICK
 10 INV_CLOSE  11 CMD  12 MOB_SPAWN  13 MOB_DESPAWN  14 MARKER
-15 CREATIVE_SET
+15 CREATIVE_SET  16 REANCHOR
 ```
 
 ## 2. Payload encodings
@@ -62,6 +62,7 @@ Reference: Go `internal/rawevent`, Java `com.mcbench.capture.model.RawEvent`.
 | `MOB_SPAWN` | `entity_type` (`VarInt`), `tag` (`String`) |
 | `MOB_DESPAWN` | `entity_type` `reason` (2× `VarInt`) |
 | `MARKER` | `marker` (`String`), then optionally `x` `y` `z` (3× `Float64BE`) and `yaw` `pitch` (2× `Float32BE`) |
+| `REANCHOR` | `x` `y` `z` (3× `Float64BE`), `yaw` `pitch` (2× `Float32BE`), `dimension` (`VarInt`) — an absolute position the server moved the player to |
 | `CREATIVE_SET` | `slot` `item_id` `count` (3× `VarInt`) — creative inventory set; server writes the item straight into the slot (replay/demo only) |
 
 Only the `session_start` marker carries the trailing position, and it is the one
@@ -69,6 +70,28 @@ exact position in the whole format — every other event locates itself with the
 header's coarse chunk, which is 64 blocks wide and has no `Y`. The compiler
 turns it into the trace's origin so `bench-playerdata` can place the replay bot
 there before it logs in; see §4.
+
+`REANCHOR` exists because movement is stored as a **delta** from the previous
+packet, which is only meaningful while the player moves under their own power.
+A teleport, a respawn or a world change arrives as one packet at the
+destination. Without an anchor the capture would record a single enormous delta
+— 1700 blocks in a tick for a `/tp` — and the replay bot would send it verbatim,
+be rejected as an illegal move, and be rubber-banded. From there it is somewhere
+the trace does not think it is, and since dig and place carry absolute
+coordinates, every block event for the rest of the session misses.
+
+The capture plugin does two things at each discontinuity, and both matter: it
+emits the anchor, **and** it moves the delta baseline to the new position so the
+*next* packet is not measured across the jump. Verified on a live server: a
+1700-block `/tp` mid-session produced one anchor and left the largest delta in
+the whole capture at 0.35 blocks.
+
+Replay adopts an anchor only when it is close enough for the server to accept
+the bot claiming it (under 8 blocks). A client cannot teleport itself, so a real
+teleport is reproduced only if the benchmark server teleports the bot too — the
+captured command replaying, or the same portal — which arrives as a server
+`sync_position` the reader already folds into the view. The remainder is counted
+as `relocations_unreproduced` in `run.json` rather than faked.
 
 The position fields are optional so that captures written before they existed
 still decode: a reader that runs out of bytes after the `marker` string has read

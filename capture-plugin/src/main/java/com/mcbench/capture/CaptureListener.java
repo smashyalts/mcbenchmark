@@ -28,6 +28,8 @@ import org.bukkit.event.player.PlayerInteractEntityEvent;
 import org.bukkit.event.player.PlayerInteractEvent;
 import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
+import org.bukkit.event.player.PlayerRespawnEvent;
+import org.bukkit.event.player.PlayerTeleportEvent;
 import org.bukkit.event.player.PlayerToggleSneakEvent;
 import org.bukkit.event.player.PlayerToggleSprintEvent;
 
@@ -100,6 +102,7 @@ public final class CaptureListener implements Listener {
      */
     @EventHandler(priority = EventPriority.MONITOR)
     public void onWorldChange(PlayerChangedWorldEvent e) {
+        reanchor(e.getPlayer(), e.getPlayer().getLocation());
         PlayerSession s = mgr.session(e.getPlayer().getUniqueId());
         if (s != null) {
             s.setDimensionId(CaptureManager.dimensionId(e.getPlayer().getWorld()));
@@ -111,6 +114,58 @@ public final class CaptureListener implements Listener {
     // cannot see rejected movement or idle position packets — both of which are
     // real server load. PacketMovementListener captures it from the wire
     // instead, on the connection's Netty thread.
+
+    /**
+     * Records an absolute position whenever the server relocates a player, and
+     * moves the delta baseline with it.
+     *
+     * Movement is captured as a delta from the previous packet, which is only
+     * meaningful while the player moves under their own power. A teleport
+     * arrives as a single packet at the destination, so without this the capture
+     * would record one enormous delta — 1600 blocks in a tick for a `/tp` — and
+     * the replay bot would send it verbatim, be rejected as "moved too quickly",
+     * and get rubber-banded. From that point the bot is somewhere the trace does
+     * not think it is, and since dig and place carry absolute coordinates, every
+     * block event for the rest of the session misses.
+     *
+     * Resetting the baseline is the half that matters: the event tells replay
+     * where to jump to, and the baseline reset stops the *next* captured packet
+     * from being a delta measured across the teleport.
+     */
+    private void reanchor(Player p, Location to) {
+        if (to == null) {
+            return;
+        }
+        PlayerSession s = mgr.session(p.getUniqueId());
+        if (s == null) {
+            return;
+        }
+        s.setPos(to.getX(), to.getY(), to.getZ(), to.getYaw(), to.getPitch());
+        index.update(p.getUniqueId(), to.getX(), to.getY(), to.getZ());
+        mgr.record(p.getUniqueId(), RawEvent.KIND_REANCHOR,
+                Payloads.reanchor(to.getX(), to.getY(), to.getZ(), to.getYaw(),
+                        to.getPitch(), CaptureManager.dimensionId(to.getWorld())),
+                to);
+    }
+
+    /**
+     * Teleports: commands, plugins, portals, ender pearls, spawn menus.
+     *
+     * MONITOR + ignoreCancelled means the teleport is going to happen, and
+     * getTo() is where the player ends up. The event fires before the move is
+     * applied, which is fine — the baseline has to be updated before the next
+     * movement packet arrives, not after.
+     */
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    public void onTeleport(PlayerTeleportEvent e) {
+        reanchor(e.getPlayer(), e.getTo());
+    }
+
+    /** Respawn after death: the server picks the position outright. */
+    @EventHandler(priority = EventPriority.MONITOR)
+    public void onRespawn(PlayerRespawnEvent e) {
+        reanchor(e.getPlayer(), e.getRespawnLocation());
+    }
 
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onSprint(PlayerToggleSprintEvent e) {

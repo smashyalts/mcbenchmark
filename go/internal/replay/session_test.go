@@ -14,14 +14,14 @@ import (
 // mockServer implements just enough of the server side of the 1.21.4 protocol
 // to bring a replay session to play state and observe its movement packets.
 type mockResult struct {
-	reachedPlay    bool
-	teleportOK     bool
-	movePackets    int
-	flyingPackets  int
-	keepAliveEcho  bool
-	loginName      string
-	digStatuses    []int32
-	err            string
+	reachedPlay   bool
+	teleportOK    bool
+	movePackets   int
+	flyingPackets int
+	keepAliveEcho bool
+	loginName     string
+	digStatuses   []int32
+	err           string
 }
 
 func runMockServer(t *testing.T, ln net.Listener, useCompression bool, out *mockResult, done chan<- struct{}) {
@@ -82,10 +82,10 @@ func runMockServer(t *testing.T, ln net.Listener, useCompression bool, out *mock
 
 	// Play: sync position with teleport id 42.
 	sp := appendVarInt(nil, 42)
-	sp = appendF64(sp, 0, 64, 0)  // x,y,z
-	sp = appendF64(sp, 0, 0, 0)   // velocity
-	sp = appendF32(sp, 0, 0)      // yaw, pitch
-	sp = append(sp, 0, 0, 0, 0)   // flags int32 = 0 (absolute)
+	sp = appendF64(sp, 0, 64, 0) // x,y,z
+	sp = appendF64(sp, 0, 0, 0)  // velocity
+	sp = appendF32(sp, 0, 0)     // yaw, pitch
+	sp = append(sp, 0, 0, 0, 0)  // flags int32 = 0 (absolute)
 	if err := c.WritePacket(mcproto.CBPlaySyncPosition, sp); err != nil {
 		out.err = "send sync position: " + err.Error()
 		return
@@ -299,5 +299,106 @@ func TestDigSendsStartBeforeFinish(t *testing.T) {
 		if res.digStatuses[i] != w {
 			t.Errorf("dig status[%d] = %d, want %d", i, res.digStatuses[i], w)
 		}
+	}
+}
+
+// TestReanchorNearIsAdopted covers a small server-side relocation: close enough
+// that the server accepts the bot claiming it, so the view follows outright
+// rather than accumulating a delta.
+func TestReanchorNearIsAdopted(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	addr := ln.Addr().(*net.TCPAddr)
+
+	var res mockResult
+	done := make(chan struct{})
+	go runMockServer(t, ln, false, &res, done)
+
+	// Spawn is (0,64,0); jump to (3,66,-4), well inside the self-move limit.
+	tr := &tracefile.Trace{
+		SchemaVersion: tracefile.SchemaVersion, ProtocolVersion: mcproto.ProtocolDefault,
+		WorldProfileID: "test", TraceID: "near", DurationUs: 300_000,
+		Events: []tracefile.TraceEvent{
+			{OffsetUs: 100_000, Kind: rawevent.KindReanchor,
+				Data: rawevent.ReanchorPayload{X: 3, Y: 66, Z: -4, Yaw: 90}.Encode()},
+		},
+	}
+	coll := NewCollector()
+	sess := newTestSession(addr.String(), "127.0.0.1", uint16(addr.Port), tr, coll)
+
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() { defer wg.Done(); sess.Run(stop) }()
+	wg.Wait()
+	close(stop)
+	<-done
+
+	sess.viewMu.Lock()
+	got := sess.view
+	sess.viewMu.Unlock()
+	if got.X != 3 || got.Y != 66 || got.Z != -4 {
+		t.Errorf("view = (%.1f,%.1f,%.1f), want (3,66,-4) applied absolutely",
+			got.X, got.Y, got.Z)
+	}
+	if n := coll.Agg.RelocationsUnreproduced.Load(); n != 0 {
+		t.Errorf("relocations_unreproduced = %d, want 0", n)
+	}
+	if n := coll.Agg.EventsSkipped.Load(); n != 0 {
+		t.Errorf("events skipped = %d, want 0 (re-anchor must be handled)", n)
+	}
+}
+
+// TestReanchorFarIsCountedNotFaked covers a real teleport.
+//
+// A client cannot teleport itself. Claiming a position 1600 blocks away is
+// exactly what an illegal move looks like, so the server rejects it and
+// rubber-bands -- verified on Paper 26.1.2, where a replayed 1700-block teleport
+// moved the bot nowhere. Faking it would add packets the server throws away and
+// leave the view disagreeing with reality, so the run reports the divergence
+// instead.
+func TestReanchorFarIsCountedNotFaked(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	addr := ln.Addr().(*net.TCPAddr)
+
+	var res mockResult
+	done := make(chan struct{})
+	go runMockServer(t, ln, false, &res, done)
+
+	tr := &tracefile.Trace{
+		SchemaVersion: tracefile.SchemaVersion, ProtocolVersion: mcproto.ProtocolDefault,
+		WorldProfileID: "test", TraceID: "far", DurationUs: 300_000,
+		Events: []tracefile.TraceEvent{
+			{OffsetUs: 100_000, Kind: rawevent.KindReanchor,
+				Data: rawevent.ReanchorPayload{X: 1600.5, Y: 72, Z: -800.5}.Encode()},
+		},
+	}
+	coll := NewCollector()
+	sess := newTestSession(addr.String(), "127.0.0.1", uint16(addr.Port), tr, coll)
+
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() { defer wg.Done(); sess.Run(stop) }()
+	wg.Wait()
+	close(stop)
+	<-done
+
+	sess.viewMu.Lock()
+	got := sess.view
+	sess.viewMu.Unlock()
+	if got.X > 100 || got.Z < -100 {
+		t.Errorf("view = (%.1f,%.1f,%.1f); an unreachable teleport must not be "+
+			"claimed, the server would reject it", got.X, got.Y, got.Z)
+	}
+	if n := coll.Agg.RelocationsUnreproduced.Load(); n != 1 {
+		t.Errorf("relocations_unreproduced = %d, want 1", n)
 	}
 }

@@ -301,11 +301,15 @@ func classify(counts map[int32]int, total int) []string {
 //
 //  1. The session_start marker's position. Exact, and what every capture taken
 //     after that field was added will have.
-//  2. The first block the session dug or placed. A player who broke a block was
+//  2. The first re-anchor. The server put the player exactly there, so it is a
+//     real position rather than an inferred one. It is not where the session
+//     began, but replay applies each re-anchor as it comes, so starting from the
+//     first one costs only the movement before it.
+//  3. The first block the session dug or placed. A player who broke a block was
 //     within interaction range of it, so standing on top of it is guaranteed to
 //     put the bot in range. Assumes the space above that block is passable,
 //     which is nearly always true of a block someone reached to mine.
-//  3. Nothing. The event header stores only a coarse chunk — 64 blocks wide,
+//  4. Nothing. The event header stores only a coarse chunk — 64 blocks wide,
 //     with no Y at all — which is not close enough to stand on. Guessing a Y
 //     would drop the bot inside stone or leave it hovering, both worse than
 //     leaving it at spawn where the operator can see the problem.
@@ -321,6 +325,19 @@ func resolveOrigin(evs []rawevent.RawEvent) *tracefile.Origin {
 		return &tracefile.Origin{
 			X: m.X, Y: m.Y, Z: m.Z, Yaw: m.Yaw, Pitch: m.Pitch,
 			Dimension: e.DimensionID, Exact: true,
+		}
+	}
+	for _, e := range evs {
+		if e.Kind != rawevent.KindReanchor {
+			continue
+		}
+		a, err := rawevent.DecodeReanchor(e.Payload)
+		if err != nil {
+			continue
+		}
+		return &tracefile.Origin{
+			X: a.X, Y: a.Y, Z: a.Z, Yaw: a.Yaw, Pitch: a.Pitch,
+			Dimension: a.Dimension, Exact: true,
 		}
 	}
 	for _, e := range evs {

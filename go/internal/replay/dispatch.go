@@ -10,6 +10,13 @@ import (
 	"mcbench/internal/tracefile"
 )
 
+// maxSelfMoveSq is the squared distance a client may put between two of its own
+// position packets before the server calls it cheating. Vanilla and Paper reject
+// a move whose squared length exceeds 100 (10 blocks) and teleport the player
+// back; 64 leaves margin under that so a re-anchor we do adopt is never itself
+// the thing that trips the check.
+const maxSelfMoveSq = 64.0
+
 // dispatch converts one trace event into serverbound packet(s) and updates the
 // local world view. Unmapped kinds increment EventsSkipped.
 func (s *Session) dispatch(e tracefile.TraceEvent) {
@@ -33,6 +40,45 @@ func (s *Session) dispatch(e tracefile.TraceEvent) {
 			mcproto.PositionLook(x, y, z, yaw, pitch, m.OnGround))
 		// This tick's movement packet is accounted for, so the tick loop must
 		// not also send an idle one — a real client sends exactly one.
+		s.movedThisTick = true
+		s.idleTicks = 0
+
+	case rawevent.KindReanchor:
+		// The server relocated the captured player, so the delta chain restarts
+		// here.
+		//
+		// What replay can do about it is limited, and pretending otherwise makes
+		// things worse. A client cannot teleport itself: claiming a position 1600
+		// blocks away is indistinguishable from cheating, so the server rejects
+		// it and rubber-bands the bot straight back. Measured on Paper 26.1.2 —
+		// a replayed 1700-block teleport moved the bot nowhere at all.
+		//
+		// So only adopt the position when it is close enough that the server will
+		// accept it as ordinary movement, which covers the small corrections
+		// plugins make. For a real teleport the bot follows only if the benchmark
+		// server teleports it too — because the captured command replayed, or it
+		// walked into the same portal — and that arrives as a server
+		// sync_position, which the reader already folds into the view. Anything
+		// left over is counted rather than faked.
+		a, err := rawevent.DecodeReanchor(e.Data)
+		if err != nil {
+			handled = false
+			break
+		}
+		s.viewMu.Lock()
+		dx, dy, dz := a.X-s.view.X, a.Y-s.view.Y, a.Z-s.view.Z
+		near := dx*dx+dy*dy+dz*dz <= maxSelfMoveSq
+		if near {
+			s.view.X, s.view.Y, s.view.Z = a.X, a.Y, a.Z
+			s.view.Yaw, s.view.Pitch = a.Yaw, a.Pitch
+		}
+		s.viewMu.Unlock()
+		if !near {
+			s.agg.RelocationsUnreproduced.Add(1)
+			break
+		}
+		_ = s.send(mcproto.SBPlayPositionLook,
+			mcproto.PositionLook(a.X, a.Y, a.Z, a.Yaw, a.Pitch, true))
 		s.movedThisTick = true
 		s.idleTicks = 0
 
