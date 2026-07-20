@@ -142,11 +142,17 @@ func (s *Session) handlePlay(id int32, body []byte, onPlayReady func(), inConfig
 			return true
 		}
 		s.viewMu.Lock()
+		// Only the first sync_position is the spawn. Later ones are the server
+		// correcting a move it rejected, and a bot that legitimately walked away
+		// from its origin must not be reported as misplaced.
+		firstSync := !s.view.HasPos
 		s.applyTeleport(p)
 		s.view.HasPos = true
 		x, y, z, yaw, pitch := s.view.X, s.view.Y, s.view.Z, s.view.Yaw, s.view.Pitch
 		s.viewMu.Unlock()
-		s.checkSpawnAgainstOrigin(x, y, z)
+		if firstSync {
+			s.checkSpawnAgainstOrigin(x, y, z)
+		}
 		if err := s.send(mcproto.SBPlayTeleportConfirm, mcproto.TeleportConfirm(p.TeleportID)); err != nil {
 			s.fail("teleport confirm: " + err.Error())
 			return true
