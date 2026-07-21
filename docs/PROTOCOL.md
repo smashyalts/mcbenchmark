@@ -11,6 +11,30 @@ java -DbundlerMainClass=net.minecraft.data.Main -jar cache/mojang_<ver>.jar --re
 # → generated/reports/registries.json  (item/entity ids)
 ```
 
+Packet **shapes** move as well as ids, and the report does not show shapes. Two
+that changed under us in 26.1.2, both found by a server that dropped the
+connection rather than by reading a wiki:
+
+- **`interact` was split.** It used to carry an action-type discriminator (0
+  interact, 1 attack, 2 interact-at). Attacking is now its own packet,
+  `attack` (`0x01`), whose whole body is one VarInt. Sending the old union
+  fails to decode: *"Failed to decode packet 'serverbound/minecraft:interact'"*.
+- **`chat` grew a trailing checksum byte** inside `LastSeenMessages.Update`.
+  Omitting it leaves the server one byte short, reported as a corrupt packet
+  rather than as anything to do with chat.
+
+When a shape is in doubt, read it off the server's own codec instead of
+guessing — the jar the data report came from also contains the decoder:
+
+```
+unzip -o cache/mojang_<ver>.jar META-INF/versions/<ver>/server-<ver>.jar
+javap -p -c net/minecraft/network/protocol/game/ServerboundChatPacket.class
+```
+
+Paper ships Mojang-mapped, so the field order reads straight out of the
+constructor. That is how the chat layout above was established, checksum and
+all, before a single packet was sent.
+
 Retargeting a different version means regenerating that report, updating
 `ids.go`, and verifying the payload shapes of the packets the client builds
 (login/config IDs are stable across versions; play-phase IDs shift frequently).
@@ -50,10 +74,14 @@ a clear error.
 | `MOVE` | Position+Look (absolute position accumulated from deltas) |
 | `SPRINT_TOGGLE` | Entity Action start/stop sprinting |
 | `SNEAK_TOGGLE` | Entity Action start/stop sneaking |
-| `DIG` | Player Action (block dig) + Arm Animation |
+| `DIG` | Player Action (block dig) + Arm Animation. Start/abort/finish all replay verbatim; a finish with no start (traces recorded before packet capture) still gets a synthetic start, counted as `dig_starts_synthesised` |
 | `PLACE_BLOCK` | Use Item On (block place) |
 | `USE_ITEM` | Use Item |
-| `ATTACK_ENTITY` / `INTERACT_ENTITY` | Arm Animation (swing) |
+| `ATTACK_ENTITY` | Attack (`0x01`) at a live entity of the captured type, found by tracking `add_entity`/`remove_entities`, plus Arm Animation. Counted as `attacks_on_type` / `attacks_off_type` / `attacks_no_target` |
+| `INTERACT_ENTITY` | Interact (`0x1A`) at the same |
+| `HELD_SLOT` | Set Carried Item (a **short**, not a VarInt) |
+| `CHAT` | Chat, unsigned, empty acknowledgement window |
+| `DROP_ITEM` / `SWAP_HANDS` | Player Action statuses 3/4 and 6 |
 | `CMD` | Chat Command (unsigned), leading `/` stripped |
 | `INV_OPEN` | Use Item On at the captured container position (server replies with `open_screen`) |
 | `INV_CLICK` | Container Click, using the **live** window/state id |

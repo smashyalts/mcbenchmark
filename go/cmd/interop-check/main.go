@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 
+	"mcbench/internal/mcproto"
 	"mcbench/internal/rawevent"
 	"mcbench/internal/rawlog"
 )
@@ -21,8 +22,8 @@ func main() {
 	if err != nil {
 		fail("read: %v", err)
 	}
-	if len(events) != 12 {
-		fail("expected 12 events, got %d", len(events))
+	if len(events) != 17 {
+		fail("expected 17 events, got %d", len(events))
 	}
 
 	pid := sha256.Sum256([]byte("player-uuid-0|salt"))
@@ -74,6 +75,33 @@ func main() {
 
 	if m, _ := rawevent.DecodeMarker(events[8].Payload); m != "round_end" {
 		fail("second frame marker mismatch: %q", m)
+	}
+
+	// The entity reference is a registry key now, not an enum ordinal, and it
+	// must resolve to a protocol id or replay cannot aim an attack.
+	ref, err := rawevent.DecodeEntityRef(events[5].Payload)
+	if err != nil || ref.TypeKey != "minecraft:zombie" {
+		fail("entity ref mismatch: %+v (%v)", ref, err)
+	}
+	if _, ok := mcproto.EntityTypeID[ref.TypeKey]; !ok {
+		fail("entity key %q has no protocol id", ref.TypeKey)
+	}
+
+	// The kinds captured from the wire rather than from Bukkit events.
+	if slot, _ := rawevent.DecodeHeldSlot(events[12].Payload); slot != 4 {
+		fail("held slot mismatch: %d", slot)
+	}
+	if msg, _ := rawevent.DecodeChat(events[13].Payload); msg != "selling 64 diamonds at spawn" {
+		fail("chat mismatch: %q", msg)
+	}
+	if full, _ := rawevent.DecodeDropItem(events[14].Payload); !full {
+		fail("drop item should be a full stack")
+	}
+	if events[15].Kind != rawevent.KindSwapHands || len(events[15].Payload) != 0 {
+		fail("swap hands mismatch: %+v", events[15])
+	}
+	if d, _ := rawevent.DecodeDig(events[16].Payload); d.Action != 0 || d.X != 10 {
+		fail("dig start mismatch: %+v", d)
 	}
 
 	fmt.Printf("OK: decoded %d events across frames, all fields match\n", len(events))

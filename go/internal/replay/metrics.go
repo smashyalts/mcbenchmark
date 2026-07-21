@@ -40,6 +40,19 @@ type Aggregate struct {
 	// block too high, against air — and nothing in the report could show it.
 	PlacesSent      atomic.Int64
 	PlacesConfirmed atomic.Int64
+	// DigStartsSynthesised counts finishes that arrived with no start. Traces
+	// recorded from BlockBreakEvent hold nothing else, so replay invents one and
+	// the break collapses into a single tick instead of spanning the block's real
+	// hardness. A non-zero count means the trace predates packet-level dig
+	// capture and its mining load is understated — re-record to fix it.
+	DigStartsSynthesised atomic.Int64
+	// Attack outcomes. An attack replayed with nothing in range is a swing at
+	// air, which reproduces none of combat's cost, so it is counted apart from
+	// one that landed. OffType means something was hit but not the species the
+	// capture hit — the load is present but not identical.
+	AttacksOnType   atomic.Int64
+	AttacksOffType  atomic.Int64
+	AttacksNoTarget atomic.Int64
 }
 
 // Sample is one point of the concurrency time series.
@@ -84,6 +97,10 @@ type Report struct {
 	DigsConfirmed           int64           `json:"digs_confirmed"`
 	PlacesSent              int64           `json:"places_sent"`
 	PlacesConfirmed         int64           `json:"places_confirmed"`
+	DigStartsSynthesised    int64           `json:"dig_starts_synthesised"`
+	AttacksOnType           int64           `json:"attacks_on_type"`
+	AttacksOffType          int64           `json:"attacks_off_type"`
+	AttacksNoTarget         int64           `json:"attacks_no_target"`
 	PacketsSent             int64           `json:"packets_sent"`
 	BytesIn                 int64           `json:"bytes_in"`
 	BytesOut                int64           `json:"bytes_out"`
@@ -148,6 +165,10 @@ func (c *Collector) WriteReport(dir, scenarioName, target string, protocol, targ
 		DigsConfirmed:           c.Agg.DigsConfirmed.Load(),
 		PlacesSent:              c.Agg.PlacesSent.Load(),
 		PlacesConfirmed:         c.Agg.PlacesConfirmed.Load(),
+		DigStartsSynthesised:    c.Agg.DigStartsSynthesised.Load(),
+		AttacksOnType:           c.Agg.AttacksOnType.Load(),
+		AttacksOffType:          c.Agg.AttacksOffType.Load(),
+		AttacksNoTarget:         c.Agg.AttacksNoTarget.Load(),
 		PacketsSent:             c.Agg.PacketsSent.Load(),
 		BytesIn:                 c.Agg.BytesIn.Load(),
 		BytesOut:                c.Agg.BytesOut.Load(),

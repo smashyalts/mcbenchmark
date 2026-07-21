@@ -161,6 +161,15 @@ func (s *Session) handlePlay(id int32, body []byte, onPlayReady func(), inConfig
 		_ = s.send(mcproto.SBPlayPositionLook,
 			mcproto.PositionLook(x, y, z, yaw, pitch, true))
 		onPlayReady()
+	case mcproto.CBPlayAddEntity:
+		// What the client is told exists nearby. Attacks are aimed with this.
+		if a, err := mcproto.ParseAddEntity(body); err == nil && s.entities != nil {
+			s.entities.add(a)
+		}
+	case mcproto.CBPlayRemoveEntities:
+		if ids, err := mcproto.ParseRemoveEntities(body); err == nil && s.entities != nil {
+			s.entities.remove(ids)
+		}
 	case mcproto.CBPlayBlockUpdate:
 		// The server's verdict on a dig. Without this the run can only report
 		// that packets were sent, which is exactly the failure mode that makes a

@@ -16,7 +16,6 @@ import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
 import org.bukkit.event.block.Action;
-import org.bukkit.event.block.BlockBreakEvent;
 import org.bukkit.event.block.BlockPlaceEvent;
 import org.bukkit.event.entity.CreatureSpawnEvent;
 import org.bukkit.event.entity.EntityDamageByEntityEvent;
@@ -43,7 +42,7 @@ import org.bukkit.event.player.PlayerToggleSprintEvent;
  * This covers the cold event kinds only — the ones that fire a few times per
  * player per minute. Movement, the one kind whose rate scales with player count
  * and tick rate, is captured from packets instead (see
- * {@link PacketMovementListener}) and never reaches the main thread.
+ * {@link PacketCaptureListener}) and never reaches the main thread.
  */
 public final class CaptureListener implements Listener {
     private final CaptureManager mgr;
@@ -159,7 +158,7 @@ public final class CaptureListener implements Listener {
     // Movement is NOT captured here. PlayerMoveEvent only fires for moves the
     // server already accepted, and only when something actually changed, so it
     // cannot see rejected movement or idle position packets — both of which are
-    // real server load. PacketMovementListener captures it from the wire
+    // real server load. PacketCaptureListener captures it from the wire
     // instead, on the connection's Netty thread.
 
     /**
@@ -226,14 +225,13 @@ public final class CaptureListener implements Listener {
                 Payloads.toggle(e.isSneaking()), e.getPlayer().getLocation());
     }
 
-    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
-    public void onBreak(BlockBreakEvent e) {
-        var b = e.getBlock();
-        // action 2 = finish; face is unknown from this event, use 1 (up) as a
-        // stable placeholder consumed by the replay client.
-        mgr.record(e.getPlayer().getUniqueId(), RawEvent.KIND_DIG,
-                Payloads.dig(2, b.getX(), b.getY(), b.getZ(), 1), b.getLocation());
-    }
+    // Digging is NOT captured here any more. BlockBreakEvent fires once the block
+    // is already gone, so it could only ever produce a lone "finish" with no
+    // start, no face and no duration — replay had to invent the start, and a
+    // break that really took two seconds of per-tick destroy-progress work
+    // collapsed into a single tick. It also never fired for a dig the player
+    // began and abandoned, which costs the server real work. All of that arrives
+    // intact on the packet path; see PacketCaptureListener.onAction.
 
     /**
      * Records a placement the way the protocol expresses it: the block that was
@@ -304,9 +302,10 @@ public final class CaptureListener implements Listener {
 
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onInteractEntity(PlayerInteractEntityEvent e) {
-        int hint = e.getRightClicked().getType().ordinal();
+        int hand = e.getHand() != null && e.getHand().name().equals("OFF_HAND") ? 1 : 0;
         mgr.record(e.getPlayer().getUniqueId(), RawEvent.KIND_INTERACT_ENTITY,
-                Payloads.interactEntity(hint, 0), e.getPlayer().getLocation());
+                Payloads.entityRef(e.getRightClicked().getType().getKey().toString(), hand),
+                e.getPlayer().getLocation());
     }
 
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
@@ -314,9 +313,9 @@ public final class CaptureListener implements Listener {
         if (!(e.getDamager() instanceof Player p)) {
             return;
         }
-        int hint = e.getEntity().getType().ordinal();
         mgr.record(p.getUniqueId(), RawEvent.KIND_ATTACK_ENTITY,
-                Payloads.attackEntity(hint), p.getLocation());
+                Payloads.entityRef(e.getEntity().getType().getKey().toString(), 0),
+                p.getLocation());
     }
 
     @EventHandler(priority = EventPriority.MONITOR)

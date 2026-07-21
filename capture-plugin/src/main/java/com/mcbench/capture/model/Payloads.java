@@ -52,16 +52,21 @@ public final class Payloads {
         return w.toByteArray();
     }
 
-    public static byte[] interactEntity(int targetHint, int action) {
+    /**
+     * What was attacked or interacted with: the entity's registry key, then the
+     * hand used.
+     *
+     * The key ("minecraft:zombie"), not EntityType.ordinal(). The ordinal is an
+     * enum position — it bears no relation to the protocol's entity type id,
+     * shifts whenever an entity is added to the enum, and so could never be
+     * matched against anything the replay client sees on the wire. It made the
+     * captured target unusable, which is why attacks were replayed as a bare arm
+     * swing: an animation with no damage, no aggro, no drops and no XP behind it.
+     */
+    public static byte[] entityRef(String typeKey, int hand) {
         ByteWriter w = new ByteWriter();
-        w.varInt(targetHint);
-        w.varInt(action);
-        return w.toByteArray();
-    }
-
-    public static byte[] attackEntity(int targetHint) {
-        ByteWriter w = new ByteWriter();
-        w.varInt(targetHint);
+        w.string(typeKey == null ? "" : typeKey);
+        w.varInt(hand);
         return w.toByteArray();
     }
 
@@ -149,6 +154,25 @@ public final class Payloads {
             w.varInt(counts[i]);
         }
         return w.toByteArray();
+    }
+
+    /** The hotbar slot (0-8) the player switched to. */
+    public static byte[] heldSlot(int slot) {
+        ByteWriter w = new ByteWriter();
+        w.varInt(slot);
+        return w.toByteArray();
+    }
+
+    /** A chat message, as typed. */
+    public static byte[] chat(String message) {
+        ByteWriter w = new ByteWriter();
+        w.string(message == null ? "" : message);
+        return w.toByteArray();
+    }
+
+    /** A dropped item: whole stack (ctrl-Q) or a single item (Q). */
+    public static byte[] dropItem(boolean fullStack) {
+        return new byte[] { (byte) (fullStack ? 1 : 0) };
     }
 
     /**

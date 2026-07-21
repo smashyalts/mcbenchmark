@@ -59,6 +59,27 @@ public final class RawEvent {
      */
     public static final int KIND_INVENTORY_SNAPSHOT = 17;
 
+    /**
+     * A hotbar slot change. The login inventory says what the player carried;
+     * this says what they were holding at any given moment, which is what
+     * actually decides how long a block takes to break — 7.5 seconds barehanded
+     * against a diamond pickaxe's 0.4 on the same stone.
+     */
+    public static final int KIND_HELD_SLOT = 18;
+
+    /**
+     * A chat message. One of the few player actions whose server cost scales
+     * with the population rather than the sender: the message is fanned out to
+     * everyone who can see it.
+     */
+    public static final int KIND_CHAT = 19;
+
+    /** A Q / ctrl-Q drop, which spawns an item entity that then ticks. */
+    public static final int KIND_DROP_ITEM = 20;
+
+    /** The offhand swap (F). */
+    public static final int KIND_SWAP_HANDS = 21;
+
     public long tMicro;
     /** Wall-clock epoch millis, used for frame headers only; NOT encoded. */
     public long epochMs;

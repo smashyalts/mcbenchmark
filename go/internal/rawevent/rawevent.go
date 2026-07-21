@@ -38,6 +38,21 @@ const (
 	// bot's player data instead — and without them every bot mines barehanded,
 	// which is a 20x error in block-break time against a diamond pickaxe.
 	KindInventorySnapshot int32 = 17
+	// KindHeldSlot is a hotbar slot change. Tool tier dominates block-break time
+	// — barehanded stone takes 7.5 seconds against a diamond pickaxe's 0.4 — so a
+	// bot that keeps whatever it logged in with reproduces neither the timing of
+	// a trace that switched tools nor, for harder blocks, the break at all.
+	KindHeldSlot int32 = 18
+	// KindChat is a chat message. Worth its own kind because the cost is not in
+	// receiving it: the server fans one message out to every player who can see
+	// it, so chat is one of the few actions whose server cost scales with the
+	// population rather than with the sender.
+	KindChat int32 = 19
+	// KindDropItem is a Q / ctrl-Q drop: an item entity spawns, ticks, and gets
+	// picked up or despawns.
+	KindDropItem int32 = 20
+	// KindSwapHands is the offhand swap (F).
+	KindSwapHands int32 = 21
 )
 
 var kindNames = map[int32]string{
@@ -47,7 +62,8 @@ var kindNames = map[int32]string{
 	KindInvOpen: "inv_open", KindInvClick: "inv_click", KindInvClose: "inv_close",
 	KindCmd: "cmd", KindMobSpawn: "mob_spawn", KindMobDespawn: "mob_despawn",
 	KindMarker: "marker", KindCreativeSet: "creative_set", KindReanchor: "reanchor",
-	KindInventorySnapshot: "inventory_snapshot",
+	KindInventorySnapshot: "inventory_snapshot", KindHeldSlot: "held_slot",
+	KindChat: "chat", KindDropItem: "drop_item", KindSwapHands: "swap_hands",
 }
 
 func KindName(k int32) string {
@@ -565,4 +581,78 @@ func DecodeInvOpen(p []byte) (InvOpenPayload, error) {
 		}
 	}
 	return d, nil
+}
+
+// DecodeHeldSlot decodes KindHeldSlot: the hotbar slot (0-8) switched to.
+func DecodeHeldSlot(p []byte) (int32, error) {
+	r := mcwire.NewReader(p)
+	return r.VarInt()
+}
+
+func EncodeHeldSlot(slot int32) []byte {
+	w := mcwire.NewWriter()
+	w.VarInt(slot)
+	return w.Bytes()
+}
+
+// DecodeChat decodes KindChat to the message text.
+func DecodeChat(p []byte) (string, error) {
+	r := mcwire.NewReader(p)
+	return r.String()
+}
+
+func EncodeChat(msg string) []byte {
+	w := mcwire.NewWriter()
+	w.String(msg)
+	return w.Bytes()
+}
+
+// DecodeDropItem decodes KindDropItem: true when the whole stack was dropped
+// (ctrl-Q) rather than a single item (Q). They are different packets and,
+// downstream, very different amounts of work — a stack drop spawns one item
+// entity carrying many items, a single drop spawns one per press.
+func DecodeDropItem(p []byte) (bool, error) {
+	r := mcwire.NewReader(p)
+	return r.Bool()
+}
+
+func EncodeDropItem(fullStack bool) []byte {
+	if fullStack {
+		return []byte{1}
+	}
+	return []byte{0}
+}
+
+// EntityRef identifies what a player attacked or interacted with.
+//
+// The type is a registry key ("minecraft:zombie"), not a number. It used to be
+// Bukkit's EntityType.ordinal(), which is an enum position — it has no relation
+// to the protocol's entity type id, changes whenever an entity is added to the
+// enum, and so could never be matched against anything the replay client sees on
+// the wire. The key is stable, and mcproto.EntityTypeID turns it into the
+// protocol id that add_entity reports.
+type EntityRef struct {
+	TypeKey string
+	Hand    int32 // interact only; 0 for attacks
+}
+
+func (r EntityRef) Encode() []byte {
+	w := mcwire.NewWriter()
+	w.String(r.TypeKey)
+	w.VarInt(r.Hand)
+	return w.Bytes()
+}
+
+func DecodeEntityRef(p []byte) (EntityRef, error) {
+	r := mcwire.NewReader(p)
+	var out EntityRef
+	var err error
+	if out.TypeKey, err = r.String(); err != nil {
+		return out, err
+	}
+	// Hand is absent on attack payloads written by older captures.
+	if r.Remaining() > 0 {
+		out.Hand, _ = r.VarInt()
+	}
+	return out, nil
 }

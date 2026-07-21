@@ -202,6 +202,7 @@ func (r *Runner) buildSession(idx int, target string, deadline time.Time, perSes
 		EnableFlight: sc.Client.EnableFlight,
 		LoopTrace:    sc.Traces.ReusePolicy != "once",
 		Origin:       tr.Origin,
+		entities:     newEntityTracker(),
 		agg:          &r.coll.Agg,
 		coll:         r.coll,
 	}

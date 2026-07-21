@@ -352,6 +352,44 @@ public final class CaptureManager {
     }
 
     /**
+     * Enqueues an event captured from a packet, on the connection's Netty thread.
+     *
+     * Same as {@link #record} but into the packet ring, because a ring has one
+     * producer and this thread is not the main one. Everything a client tells the
+     * server about itself directly — digging, dropping, swapping hands, switching
+     * hotbar slot, chat — belongs here rather than behind a Bukkit event: it is
+     * the actual packet, at its actual arrival time, including the ones the
+     * server goes on to reject.
+     *
+     * Unlike movement this builds a payload first, which allocates. That is fine
+     * at these rates (a few per player per minute, against movement's twenty per
+     * second) and it is off the main thread entirely, so it cannot stall a tick.
+     */
+    public void recordFromPacket(UUID uuid, int kind, byte[] payload, int dimensionId,
+                                 int blockX, int blockZ) {
+        PlayerSession s = sessions.get(uuid);
+        if (s == null) {
+            return;
+        }
+        EventRing ring = s.packetRing();
+        if (!ring.claimProducer(Thread.currentThread())) {
+            offThreadDropped.increment();
+            return;
+        }
+        long seq = ring.claim();
+        if (seq < 0) {
+            return;
+        }
+        int len = ring.payload(seq, payload);
+        ring.header(seq, nowMicros(), dimensionId,
+                Math.floorDiv(blockX >> 4, COARSE_CHUNK_DIV),
+                Math.floorDiv(blockZ >> 4, COARSE_CHUNK_DIV),
+                kind, len);
+        ring.publish(seq);
+        recordedTotal.increment();
+    }
+
+    /**
      * Enqueues an event with a caller-built payload. loc supplies the world
      * anchor. No-op if the player has no active session.
      */

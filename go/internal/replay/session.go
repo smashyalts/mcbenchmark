@@ -140,6 +140,15 @@ type Session struct {
 	digPending   map[[3]int32]bool
 	placePending map[[3]int32]bool
 
+	// Live entities the server has told this client about, so an attack can be
+	// aimed at something real instead of being a bare animation.
+	entities *entityTracker
+
+	// digStarted tracks positions this session has already sent a START for, so
+	// a trace that carries its own real START is not given a synthetic one too.
+	// Touched only by the dispatch goroutine.
+	digStarted map[[3]int32]bool
+
 	dcReason      string
 	dcOnce        sync.Once
 	spawnWarnOnce sync.Once
@@ -244,6 +253,12 @@ func (s *Session) finishFailed(result *SessionResult, dialStart time.Time, err e
 }
 
 func (s *Session) send(id int32, body []byte) error {
+	if s.codec == nil {
+		// No connection: a session that failed to dial, or a unit test driving
+		// dispatch directly to check its bookkeeping. Either way, dropping the
+		// packet is right and panicking is not.
+		return net.ErrClosed
+	}
 	err := s.codec.WritePacket(id, body)
 	if err == nil {
 		atomic.AddInt64(&s.packetsSent, 1)
@@ -357,3 +372,10 @@ func (s *Session) checkSpawnAgainstOrigin(x, y, z float64) {
 // misplaced. Interaction range is about 4.5 blocks, so 16 (4 blocks) is inside
 // it: anything further and the trace's block events are already unreliable.
 const originWarnDistSq = 16.0
+
+// chatClock is the timestamp a chat packet carries.
+//
+// The server uses it only to reject messages from the future or the distant
+// past, so wall-clock now is both correct and the only thing it can be: the
+// capture's timestamp would be hours stale by replay time and rejected.
+func (s *Session) chatClock() int64 { return time.Now().UnixMilli() }
