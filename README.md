@@ -42,6 +42,7 @@ regenerating packet IDs (see [docs/PROTOCOL.md](docs/PROTOCOL.md)).
 | **trace-compiler** | `go/cmd/trace-compiler` | Go | Compiles capture logs into per-session traces + manifest |
 | **mc-replay** | `go/cmd/mc-replay` | Go | Replays traces as virtual players against the benchmark server |
 | **bench-playerdata** | `go/cmd/bench-playerdata` | Go | Places bench accounts at their trace's captured position before they log in |
+| **mcbench** | `go/cmd/mcbench` | Go | **The one-command path**: capture in, finished run out |
 | **bench-runner** | `host/bench-runner.sh` | bash | Optional orchestrator: wait-for-server → replay → archive |
 
 | **trace-amplify** | `go/cmd/trace-amplify` | Go | Synthesizes many varied sessions from a small real capture (record 5 → replay 1500) |
@@ -66,6 +67,7 @@ The binary formats crossing the Java/Go boundary are specified in
 
 ```bash
 cd go
+go build -o ../bin/mcbench          ./cmd/mcbench
 go build -o ../bin/trace-compiler   ./cmd/trace-compiler
 go build -o ../bin/mc-replay        ./cmd/mc-replay
 go build -o ../bin/bench-playerdata ./cmd/bench-playerdata
@@ -83,7 +85,54 @@ cd capture-plugin
 ./build.sh          # produces BenchCapture-1.1.0-beta.jar
 ```
 
-## Workflow
+## Quick start
+
+One binary, one command, capture to finished run:
+
+```bash
+bin/mcbench run capture-logs/ --world /path/to/benchmark-server/world
+```
+
+It compiles the capture, places the bench accounts, waits for you to start the
+server, replays, and writes `run.json`. Point it at a directory of `raw-*.bin`
+files or a single one.
+
+```
+read 10 raw events from capture-logs into 256 buckets
+wrote 1 traces (+0 sessions dropped by filters) and manifest.json
+wrote 1 player data file(s) to world/players/data
+waiting for 127.0.0.1:25565 — start the benchmark server now
+127.0.0.1:25565 is up
+active=1 connected=1 failed=0 events=7 digs=1/1 places=1/1
+done — report in runs/20260721-212541/run.json
+```
+
+The pause is not a convenience: placing bench accounts needs the server
+**stopped**, because Paper reads player data at login and writes it back at
+logout, so a file written underneath a running server is ignored or
+overwritten. Replaying needs it **up**. `mcbench` checks by connecting rather
+than trusting the docs — it refuses to place accounts against a live server, and
+then waits for the port to open.
+
+Useful flags:
+
+| Flag | Effect |
+|------|--------|
+| `--target host:port` | benchmark server (default `127.0.0.1:25565`) |
+| `--players N` | bot count (default: one per captured session) |
+| `--minutes N` | loop traces to fill N minutes (default: one pass, then stop) |
+| `--import <prod>/world/players/data` | give bots the real players' gear |
+| `--traces <dir>` | reuse a compiled directory instead of recompiling |
+| `--write-scenario x.yaml` | dump the generated scenario to edit and reuse |
+| `--skip-place` | leave player data alone |
+
+The steps below are the same work done by hand, and are still what you want for
+anything the one-shot does not cover — a scenario you have tuned, a compile
+whose traces you reuse across many runs, or a server you do not control the
+lifecycle of. `mcbench` calls exactly these code paths in-process, not copies of
+them.
+
+## Workflow (the individual steps)
 
 ### 1. Capture (production, online-mode server)
 

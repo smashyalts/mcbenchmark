@@ -1,0 +1,421 @@
+// Package compile turns RawEvent capture logs into per-session trace files.
+//
+// It lives here rather than inside the trace-compiler command so the one-shot
+// `mcbench run` can perform the same compile in-process: a main package cannot
+// be imported, and duplicating a two-pass bucketed compiler is how two copies
+// quietly drift apart.
+package compile
+
+import (
+	"bufio"
+	"encoding/binary"
+	"encoding/hex"
+	"fmt"
+	"hash/fnv"
+	"io"
+	"log"
+	"os"
+	"path/filepath"
+	"sort"
+
+	"mcbench/internal/mcwire"
+	"mcbench/internal/rawevent"
+	"mcbench/internal/rawlog"
+	"mcbench/internal/tracefile"
+)
+
+// sessionKey identifies one player's one visit.
+type sessionKey struct {
+	player [32]byte
+	seq    int32
+}
+
+// bucketOf spreads sessions across bucket files. Every event of a session must
+// land in the same bucket, so pass 2 can group and sort it without holding the
+// rest of the capture.
+func bucketOf(player [32]byte, seq int32) uint64 {
+	h := fnv.New64a()
+	h.Write(player[:])
+	var b [4]byte
+	binary.LittleEndian.PutUint32(b[:], uint32(seq))
+	h.Write(b[:])
+	return h.Sum64()
+}
+
+// loadBucket reads one spilled bucket back and groups it by session. Only this
+// bucket is resident, which is the whole point of the two passes.
+func loadBucket(path string) (map[sessionKey][]rawevent.RawEvent, []sessionKey, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer f.Close()
+	r := bufio.NewReaderSize(f, 256<<10)
+	sessions := make(map[sessionKey][]rawevent.RawEvent)
+	var order []sessionKey
+	buf := make([]byte, 0, 512)
+	for {
+		n, err := binary.ReadUvarint(r)
+		if err == io.EOF {
+			return sessions, order, nil
+		}
+		if err != nil {
+			return nil, nil, err
+		}
+		if cap(buf) < int(n) {
+			buf = make([]byte, n)
+		}
+		b := buf[:n]
+		if _, err := io.ReadFull(r, b); err != nil {
+			return nil, nil, err
+		}
+		ev, err := rawevent.Decode(mcwire.NewReader(b))
+		if err != nil {
+			return nil, nil, err
+		}
+		k := sessionKey{player: ev.PlayerID, seq: ev.SessionSeq}
+		if _, ok := sessions[k]; !ok {
+			order = append(order, k)
+		}
+		sessions[k] = append(sessions[k], ev)
+	}
+}
+
+// Options configures a compile. The zero value is not useful; use Defaults.
+type Options struct {
+	Input        string // directory of raw-*.bin capture logs, or a single file
+	Output       string // directory for compiled traces + manifest
+	Protocol     int
+	WorldProfile string
+	MinDuration  int // seconds; shorter sessions are dropped
+	MaxDuration  int // seconds; longer sessions are truncated
+	DropChat     bool
+	RunID        string
+	Buckets      int
+	WorkDir      string
+}
+
+// Defaults returns the options the CLI uses when a flag is not given.
+func Defaults() Options {
+	return Options{
+		Protocol: 775, WorldProfile: "default",
+		MinDuration: 600, MaxDuration: 3600,
+		RunID: "unnamed", Buckets: 256,
+	}
+}
+
+// Result summarises a compile for the caller to report.
+type Result struct {
+	Traces      int
+	Sessions    int
+	Dropped     int
+	NoOrigin    int
+	RawEvents   int
+	ManifestDir string
+}
+
+// Run performs the two-pass compile. See the pass comments below.
+func Run(o Options) (*Result, error) {
+	input, output := &o.Input, &o.Output
+	protocol, worldProfile := &o.Protocol, &o.WorldProfile
+	minDuration, maxDuration := &o.MinDuration, &o.MaxDuration
+	dropChat, runID := &o.DropChat, &o.RunID
+	workDir := &o.WorkDir
+
+	if *input == "" || *output == "" {
+		return nil, fmt.Errorf("compile: input and output are both required")
+	}
+
+	buckets := o.Buckets
+	if buckets < 1 {
+		buckets = 1
+	}
+	work, err := os.MkdirTemp(*workDir, "trace-compiler-")
+	if err != nil {
+		return nil, fmt.Errorf("create work dir: %w", err)
+	}
+	defer os.RemoveAll(work)
+
+	// Pass 1: stream every capture file and spill each event into one of N
+	// bucket files, keyed by a hash of (player_id, session_seq).
+	//
+	// The previous version read every event into one slice and then duplicated
+	// them into per-session slices. Measured at 519 bytes resident per event,
+	// which is fine for a fixture and impossible for a real capture: 1500 players
+	// for an hour is ~108M events, projecting to ~55 GB. Bucketing bounds peak
+	// memory at one bucket instead of the whole capture, at the cost of writing
+	// the events to scratch disk once.
+	//
+	// All events for a session land in the same bucket, which is what makes pass
+	// 2 able to group and sort without ever seeing the other buckets.
+	bw := make([]*bufio.Writer, buckets)
+	bf := make([]*os.File, buckets)
+	for i := 0; i < buckets; i++ {
+		f, err := os.Create(filepath.Join(work, fmt.Sprintf("b%04d.bin", i)))
+		if err != nil {
+			return nil, fmt.Errorf("create bucket: %w", err)
+		}
+		bf[i] = f
+		bw[i] = bufio.NewWriterSize(f, 256<<10)
+	}
+	total := 0
+	enc := mcwire.NewWriter()
+	err = rawlog.StreamDir(*input, func(e rawevent.RawEvent) error {
+		b := int(bucketOf(e.PlayerID, e.SessionSeq) % uint64(buckets))
+		enc.Reset()
+		e.Encode(enc)
+		var lb [binary.MaxVarintLen64]byte
+		n := binary.PutUvarint(lb[:], uint64(enc.Len()))
+		if _, err := bw[b].Write(lb[:n]); err != nil {
+			return err
+		}
+		if _, err := bw[b].Write(enc.Bytes()); err != nil {
+			return err
+		}
+		total++
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("read capture logs: %w", err)
+	}
+	for i := 0; i < buckets; i++ {
+		if err := bw[i].Flush(); err != nil {
+			return nil, fmt.Errorf("flush bucket: %w", err)
+		}
+		bf[i].Close()
+	}
+	log.Printf("read %d raw events from %s into %d buckets", total, *input, buckets)
+
+	if err := os.MkdirAll(*output, 0o755); err != nil {
+		return nil, fmt.Errorf("create output dir: %w", err)
+	}
+
+	manifest := &tracefile.Manifest{
+		SchemaVersion:   tracefile.SchemaVersion,
+		ProtocolVersion: *protocol,
+		WorldProfile:    *worldProfile,
+		RunID:           *runID,
+	}
+
+	minUs := int64(*minDuration) * 1_000_000
+	maxUs := int64(*maxDuration) * 1_000_000
+	traceNum := 0
+	dropped := 0
+	sessionCount := 0
+	noOrigin := 0
+
+	// Pass 2: one bucket at a time, so only that bucket's sessions are resident.
+	for i := 0; i < buckets; i++ {
+		sessions, order, err := loadBucket(filepath.Join(work, fmt.Sprintf("b%04d.bin", i)))
+		if err != nil {
+			return nil, fmt.Errorf("bucket %d: %w", i, err)
+		}
+		// Deterministic order within the bucket: earliest session first.
+		sort.SliceStable(order, func(a, b int) bool {
+			return sessions[order[a]][0].TMicro < sessions[order[b]][0].TMicro
+		})
+		sessionCount += len(order)
+		for _, k := range order {
+			evs := sessions[k]
+			sort.SliceStable(evs, func(a, b int) bool { return evs[a].TMicro < evs[b].TMicro })
+			base := evs[0].TMicro
+			dur := evs[len(evs)-1].TMicro - base
+			if dur < minUs {
+				dropped++
+				continue
+			}
+
+			var tevs []tracefile.TraceEvent
+			counts := map[int32]int{}
+			for _, e := range evs {
+				off := e.TMicro - base
+				if off > maxUs {
+					break
+				}
+				if *dropChat && e.Kind == rawevent.KindCmd {
+					continue
+				}
+				counts[e.Kind]++
+				tevs = append(tevs, tracefile.TraceEvent{OffsetUs: off, Kind: e.Kind, Data: e.Payload})
+			}
+			if len(tevs) == 0 {
+				dropped++
+				continue
+			}
+			traceNum++
+			durUs := tevs[len(tevs)-1].OffsetUs
+			name := fmt.Sprintf("trace-%06d.bin", traceNum)
+			t := &tracefile.Trace{
+				SchemaVersion:   tracefile.SchemaVersion,
+				ProtocolVersion: uint32(*protocol),
+				WorldProfileID:  *worldProfile,
+				TraceID:         fmt.Sprintf("%s-%06d", *runID, traceNum),
+				DurationUs:      durUs,
+				Origin:          resolveOrigin(evs),
+				Inventory:       resolveInventory(evs),
+				Events:          tevs,
+			}
+			if t.Origin == nil {
+				noOrigin++
+			}
+			if err := t.Write(filepath.Join(*output, name)); err != nil {
+				return nil, fmt.Errorf("write %s: %w", name, err)
+			}
+			manifest.Traces = append(manifest.Traces, tracefile.ManifestEntry{
+				File:       name,
+				PlayerHash: hex.EncodeToString(k.player[:]),
+				DurationS:  durUs / 1_000_000,
+				Events:     len(tevs),
+				Tags:       classify(counts, len(tevs)),
+			})
+		}
+	}
+	log.Printf("found %d sessions", sessionCount)
+	if noOrigin > 0 {
+		// Not fatal, but the user has to know: bench-playerdata cannot place a
+		// bot for these, so they log in at world spawn — out of reach of any
+		// block their trace touches.
+		log.Printf("WARNING: %d of %d traces carry no origin; their bots will spawn "+
+			"at world spawn unless bench-playerdata is given --origin. Captures "+
+			"taken before the session_start position was added only resolve an "+
+			"origin if the session dug or placed a block.",
+			noOrigin, len(manifest.Traces))
+	}
+
+	if len(manifest.Traces) == 0 {
+		return nil, fmt.Errorf("no sessions passed the filters (min-duration=%ds); nothing written", *minDuration)
+	}
+	if err := manifest.Save(*output); err != nil {
+		return nil, fmt.Errorf("write manifest: %w", err)
+	}
+	log.Printf("wrote %d traces (+%d sessions dropped by filters) and manifest.json to %s",
+		len(manifest.Traces), dropped, *output)
+	return &Result{
+		Traces: len(manifest.Traces), Sessions: sessionCount, Dropped: dropped,
+		NoOrigin: noOrigin, RawEvents: total, ManifestDir: *output,
+	}, nil
+}
+
+// classify derives coarse tags from the event mix, for scenario selection.
+func classify(counts map[int32]int, total int) []string {
+	var tags []string
+	combat := counts[rawevent.KindAttackEntity] + counts[rawevent.KindInteractEntity]
+	build := counts[rawevent.KindDig] + counts[rawevent.KindPlaceBlock]
+	moves := counts[rawevent.KindMove]
+	if combat*50 >= total {
+		tags = append(tags, "combat")
+	}
+	if build*20 >= total {
+		tags = append(tags, "build")
+	}
+	if moves*10 >= total*9 {
+		tags = append(tags, "traverse")
+	}
+	if counts[rawevent.KindCmd] > 0 {
+		tags = append(tags, "commands")
+	}
+	if len(tags) == 0 {
+		tags = append(tags, "mixed")
+	}
+	return tags
+}
+
+// resolveOrigin works out where the captured player stood, so bench-playerdata
+// can put the replay bot there before it ever connects.
+//
+// A bot cannot choose its own spawn: the server does, and a bot that lands at
+// world spawn is out of interaction range of every block its trace digs or
+// places (so those events do nothing), and hovers in mid-air if spawn is not
+// solid ground — which the server kills with a "flying is not enabled" kick
+// after four seconds.
+//
+// Sources, best first:
+//
+//  1. The session_start marker's position. Exact, and what every capture taken
+//     after that field was added will have.
+//  2. The first re-anchor. The server put the player exactly there, so it is a
+//     real position rather than an inferred one. It is not where the session
+//     began, but replay applies each re-anchor as it comes, so starting from the
+//     first one costs only the movement before it.
+//  3. The first block the session dug or placed. A player who broke a block was
+//     within interaction range of it, so standing on top of it is guaranteed to
+//     put the bot in range. Assumes the space above that block is passable,
+//     which is nearly always true of a block someone reached to mine.
+//  4. Nothing. The event header stores only a coarse chunk — 64 blocks wide,
+//     with no Y at all — which is not close enough to stand on. Guessing a Y
+//     would drop the bot inside stone or leave it hovering, both worse than
+//     leaving it at spawn where the operator can see the problem.
+func resolveOrigin(evs []rawevent.RawEvent) *tracefile.Origin {
+	for _, e := range evs {
+		if e.Kind != rawevent.KindMarker {
+			continue
+		}
+		m, err := rawevent.DecodeMarkerAt(e.Payload)
+		if err != nil || !m.HasPos || m.Marker != "session_start" {
+			continue
+		}
+		return &tracefile.Origin{
+			X: m.X, Y: m.Y, Z: m.Z, Yaw: m.Yaw, Pitch: m.Pitch,
+			Dimension: e.DimensionID, Exact: true,
+		}
+	}
+	for _, e := range evs {
+		if e.Kind != rawevent.KindReanchor {
+			continue
+		}
+		a, err := rawevent.DecodeReanchor(e.Payload)
+		if err != nil {
+			continue
+		}
+		return &tracefile.Origin{
+			X: a.X, Y: a.Y, Z: a.Z, Yaw: a.Yaw, Pitch: a.Pitch,
+			Dimension: a.Dimension, Exact: true,
+		}
+	}
+	for _, e := range evs {
+		var x, y, z int32
+		switch e.Kind {
+		case rawevent.KindDig:
+			d, err := rawevent.DecodeDig(e.Payload)
+			if err != nil {
+				continue
+			}
+			x, y, z = d.X, d.Y, d.Z
+		case rawevent.KindPlaceBlock:
+			p, err := rawevent.DecodePlace(e.Payload)
+			if err != nil {
+				continue
+			}
+			x, y, z = p.X, p.Y, p.Z
+		default:
+			continue
+		}
+		// Block centre in X/Z, standing on top of it in Y.
+		return &tracefile.Origin{
+			X: float64(x) + 0.5, Y: float64(y) + 1, Z: float64(z) + 0.5,
+			Dimension: e.DimensionID, Exact: true,
+		}
+	}
+	return nil
+}
+
+// resolveInventory pulls the login inventory snapshot out of a session.
+//
+// Replay cannot hand a client items over the wire, so this is written into the
+// bot's player data before it connects. Without it every bot mines barehanded,
+// and tool tier dominates block-break time: barehanded stone takes 7.5 seconds
+// against a diamond pickaxe's 0.4, so a mining trace recorded with a pickaxe
+// replays as a bot swinging at blocks that never break.
+func resolveInventory(evs []rawevent.RawEvent) *tracefile.Inventory {
+	for _, e := range evs {
+		if e.Kind != rawevent.KindInventorySnapshot {
+			continue
+		}
+		inv, err := rawevent.DecodeInventory(e.Payload)
+		if err != nil {
+			continue
+		}
+		return &tracefile.Inventory{SelectedSlot: inv.SelectedSlot, Items: inv.Items}
+	}
+	return nil
+}
