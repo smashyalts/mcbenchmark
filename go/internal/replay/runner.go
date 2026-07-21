@@ -64,13 +64,26 @@ func (r *Runner) Run() error {
 			case <-t.C:
 				r.coll.TakeSample()
 				a := &r.coll.Agg
-				digs := ""
+				// confirmed/sent, because sent alone has twice now reported total
+				// success for a run that changed nothing in the world.
+				blocks := ""
 				if sent := a.DigsSent.Load(); sent > 0 {
-					digs = fmt.Sprintf(" digs=%d/%d", a.DigsConfirmed.Load(), sent)
+					blocks += fmt.Sprintf(" digs=%d/%d", a.DigsConfirmed.Load(), sent)
+				}
+				if sent := a.PlacesSent.Load(); sent > 0 {
+					blocks += fmt.Sprintf(" places=%d/%d", a.PlacesConfirmed.Load(), sent)
+				}
+				// Loud, because it means the trace and the world disagree: the
+				// bot is being asked to break blocks that are not there.
+				if air := a.DigsIntoAir.Load(); air > 0 {
+					blocks += fmt.Sprintf(" into_air=%d", air)
+				}
+				if u := a.ChunksUnparsed.Load(); u > 0 {
+					blocks += fmt.Sprintf(" UNREADABLE_CHUNKS=%d", u)
 				}
 				log.Printf("active=%d connected=%d failed=%d events=%d%s",
 					a.Active.Load(), a.Connected.Load(), a.Failed.Load(),
-					a.EventsReplayed.Load(), digs)
+					a.EventsReplayed.Load(), blocks)
 			}
 		}
 	}()
@@ -107,12 +120,19 @@ func (r *Runner) Run() error {
 		rampStep = sc.Load.TargetPlayers // no ramp: go straight to target
 	}
 
+	// One deadline timer for the ramp. time.After in a select arms a new one per
+	// iteration and each survives until its own deadline, so a long ramp
+	// accumulated a live timer per tick. The one-shot selects further down are
+	// not in a loop and can keep using time.After.
+	endTimer := time.NewTimer(time.Until(deadline))
+	defer endTimer.Stop()
+
 rampLoop:
 	for launched < sc.Load.TargetPlayers {
 		select {
 		case <-rampTicker.C:
 			launch(rampStep)
-		case <-time.After(time.Until(deadline)):
+		case <-endTimer.C:
 			break rampLoop
 		}
 	}
@@ -173,10 +193,11 @@ func (r *Runner) buildSession(idx int, target string, deadline time.Time, perSes
 		playFor += jitter
 	}
 
+	// Fits 16 characters by construction: scenario.Load caps the prefix at 11.
+	// It must not be truncated here — truncation collapses accounts onto one
+	// name, and bench-playerdata would then have written player data for a
+	// username that no longer exists.
 	username := fmt.Sprintf("%s%05d", sc.Identity.UsernamePrefix, idx)
-	if len(username) > 16 {
-		username = username[:16] // Minecraft username limit
-	}
 	return &Session{
 		ID:           fmt.Sprintf("s%05d", idx),
 		Username:     username,
@@ -189,6 +210,8 @@ func (r *Runner) buildSession(idx int, target string, deadline time.Time, perSes
 		EnableFlight: sc.Client.EnableFlight,
 		LoopTrace:    sc.Traces.ReusePolicy != "once",
 		Origin:       tr.Origin,
+		entities:     newEntityTracker(),
+		blocks:       newBlockLedger(tr, &r.coll.Agg),
 		agg:          &r.coll.Agg,
 		coll:         r.coll,
 	}

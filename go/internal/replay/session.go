@@ -133,11 +133,25 @@ type Session struct {
 	packetsSent    int64
 	loops          int
 
-	// Positions this session has dug and not yet seen the server confirm.
-	// Written by the dispatch goroutine, read and cleared by the reader
+	// Positions this session has dug or built at and not yet seen the server
+	// confirm. Written by the dispatch goroutine, read and cleared by the reader
 	// goroutine when a block_update arrives, hence the mutex.
-	digMu      sync.Mutex
-	digPending map[[3]int32]bool
+	digMu        sync.Mutex
+	digPending   map[[3]int32]bool
+	placePending map[[3]int32]bool
+
+	// Live entities the server has told this client about, so an attack can be
+	// aimed at something real instead of being a bare animation.
+	entities *entityTracker
+
+	// What the client knows about the blocks its trace touches, so a dig can be
+	// told apart from a dig into air. Nil for traces that touch no blocks.
+	blocks *blockLedger
+
+	// digStarted tracks positions this session has already sent a START for, so
+	// a trace that carries its own real START is not given a synthetic one too.
+	// Touched only by the dispatch goroutine.
+	digStarted map[[3]int32]bool
 
 	dcReason      string
 	dcOnce        sync.Once
@@ -243,6 +257,12 @@ func (s *Session) finishFailed(result *SessionResult, dialStart time.Time, err e
 }
 
 func (s *Session) send(id int32, body []byte) error {
+	if s.codec == nil {
+		// No connection: a session that failed to dial, or a unit test driving
+		// dispatch directly to check its bookkeeping. Either way, dropping the
+		// packet is right and panicking is not.
+		return net.ErrClosed
+	}
 	err := s.codec.WritePacket(id, body)
 	if err == nil {
 		atomic.AddInt64(&s.packetsSent, 1)
@@ -259,6 +279,20 @@ func (s *Session) send(id int32, body []byte) error {
 // a run that counts "events replayed" alone reports total success either way.
 // That has now been the wrong answer twice, so the client checks.
 func (s *Session) noteDig(x, y, z int32) {
+	// A dig aimed at air is not a dig. The server answers one with a
+	// block_update carrying air — the very same packet it sends when it really
+	// did break something — so without the block ledger the two are
+	// indistinguishable, and a bot that spawned in the wrong place would report
+	// every one of its digs as a success. Most of a world is air, so that is the
+	// normal outcome of the misplacement this counter exists to detect.
+	if s.blocks != nil {
+		if st, known := s.blocks.lookup(x, y, z); known && mcproto.IsAir(st) {
+			s.agg.DigsIntoAir.Add(1)
+			return
+		} else if !known {
+			s.agg.DigsUnverifiable.Add(1)
+		}
+	}
 	s.digMu.Lock()
 	if s.digPending == nil {
 		s.digPending = make(map[[3]int32]bool)
@@ -268,20 +302,67 @@ func (s *Session) noteDig(x, y, z int32) {
 	s.agg.DigsSent.Add(1)
 }
 
-// confirmDig matches a clientbound block_update against the digs we sent.
-func (s *Session) confirmDig(b mcproto.BlockUpdate) {
-	if b.StateID != mcproto.AirStateID {
-		return
+// notePlace records where a placement is expected to land.
+//
+// The packet carries the block that was clicked and which face of it, so the
+// new block goes one step along that face — the same arithmetic the server
+// does. Worth tracking for the same reason as digs, and for a sharper one: a
+// placement aimed at the wrong position is not rejected loudly, it simply does
+// nothing, and the run reports the event as replayed either way.
+func (s *Session) notePlace(x, y, z, face int32) {
+	dx, dy, dz := faceOffset(face)
+	s.digMu.Lock()
+	if s.placePending == nil {
+		s.placePending = make(map[[3]int32]bool)
+	}
+	s.placePending[[3]int32{x + dx, y + dy, z + dz}] = true
+	s.digMu.Unlock()
+	s.agg.PlacesSent.Add(1)
+}
+
+// faceOffset maps a protocol block face to the direction it points.
+func faceOffset(face int32) (x, y, z int32) {
+	switch face {
+	case 0:
+		return 0, -1, 0
+	case 1:
+		return 0, 1, 0
+	case 2:
+		return 0, 0, -1
+	case 3:
+		return 0, 0, 1
+	case 4:
+		return -1, 0, 0
+	case 5:
+		return 1, 0, 0
+	}
+	return 0, 0, 0
+}
+
+// confirmBlockUpdate matches a clientbound block_update against the digs and
+// placements we sent: air where we dug, anything else where we built.
+func (s *Session) confirmBlockUpdate(b mcproto.BlockUpdate) {
+	// Keep the ledger current first: a looped trace digs the same position on
+	// every pass, and after the first pass it really is air.
+	if s.blocks != nil {
+		s.blocks.set(b.X, b.Y, b.Z, b.StateID)
 	}
 	key := [3]int32{b.X, b.Y, b.Z}
 	s.digMu.Lock()
-	pending := s.digPending[key]
-	if pending {
-		delete(s.digPending, key)
+	var dug, built bool
+	if mcproto.IsAir(b.StateID) {
+		if dug = s.digPending[key]; dug {
+			delete(s.digPending, key)
+		}
+	} else if built = s.placePending[key]; built {
+		delete(s.placePending, key)
 	}
 	s.digMu.Unlock()
-	if pending {
+	if dug {
 		s.agg.DigsConfirmed.Add(1)
+	}
+	if built {
+		s.agg.PlacesConfirmed.Add(1)
 	}
 }
 
@@ -314,3 +395,10 @@ func (s *Session) checkSpawnAgainstOrigin(x, y, z float64) {
 // misplaced. Interaction range is about 4.5 blocks, so 16 (4 blocks) is inside
 // it: anything further and the trace's block events are already unreliable.
 const originWarnDistSq = 16.0
+
+// chatClock is the timestamp a chat packet carries.
+//
+// The server uses it only to reject messages from the future or the distant
+// past, so wall-clock now is both correct and the only thing it can be: the
+// capture's timestamp would be hours stale by replay time and rejected.
+func (s *Session) chatClock() int64 { return time.Now().UnixMilli() }

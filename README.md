@@ -8,6 +8,19 @@ Targets **Minecraft 26.1.2 (protocol 775)**; validated end-to-end against a real
 Paper 26.1.2 server (see [Validation](#validation)). Retarget another version by
 regenerating packet IDs (see [docs/PROTOCOL.md](docs/PROTOCOL.md)).
 
+> **1.1.0-beta.** Every replayed action in this release has been confirmed
+> against a live Paper 26.1.2 server — blocks broken and placed, mobs damaged,
+> chat broadcast, tools switched — but only at small scale, on one world type,
+> with hand-built traces. What has *not* been re-measured since these changes is
+> a full-size run: capture now reads more packet kinds on the Netty path, and
+> replay parses every chunk column it is sent. Treat the first large run as part
+> of the testing.
+>
+> **Traces recorded before this release should be re-recorded.** Block placement
+> stored the wrong coordinate, digs carried no start, and attacks stored an
+> entity id that meant nothing — none of which the compiler can recover from an
+> old capture. Old traces still load and replay; they will just under-report.
+
 ```
  ┌────────────────────────┐   raw-*.bin    ┌─────────────────┐   trace-*.bin   ┌──────────────┐
  │ Paper capture plugin   │ ─────────────▶ │ trace-compiler  │ ──────────────▶ │  mc-replay   │
@@ -29,6 +42,7 @@ regenerating packet IDs (see [docs/PROTOCOL.md](docs/PROTOCOL.md)).
 | **trace-compiler** | `go/cmd/trace-compiler` | Go | Compiles capture logs into per-session traces + manifest |
 | **mc-replay** | `go/cmd/mc-replay` | Go | Replays traces as virtual players against the benchmark server |
 | **bench-playerdata** | `go/cmd/bench-playerdata` | Go | Places bench accounts at their trace's captured position before they log in |
+| **mcbench** | `go/cmd/mcbench` | Go | **The one-command path**: capture in, finished run out |
 | **bench-runner** | `host/bench-runner.sh` | bash | Optional orchestrator: wait-for-server → replay → archive |
 
 | **trace-amplify** | `go/cmd/trace-amplify` | Go | Synthesizes many varied sessions from a small real capture (record 5 → replay 1500) |
@@ -53,6 +67,7 @@ The binary formats crossing the Java/Go boundary are specified in
 
 ```bash
 cd go
+go build -o ../bin/mcbench          ./cmd/mcbench
 go build -o ../bin/trace-compiler   ./cmd/trace-compiler
 go build -o ../bin/mc-replay        ./cmd/mc-replay
 go build -o ../bin/bench-playerdata ./cmd/bench-playerdata
@@ -67,14 +82,61 @@ the jar:
 
 ```bash
 cd capture-plugin
-./build.sh          # produces BenchCapture-1.0.0.jar
+./build.sh          # produces BenchCapture-1.1.0-beta.jar
 ```
 
-## Workflow
+## Quick start
+
+One binary, one command, capture to finished run:
+
+```bash
+bin/mcbench run capture-logs/ --world /path/to/benchmark-server/world
+```
+
+It compiles the capture, places the bench accounts, waits for you to start the
+server, replays, and writes `run.json`. Point it at a directory of `raw-*.bin`
+files or a single one.
+
+```
+read 10 raw events from capture-logs into 256 buckets
+wrote 1 traces (+0 sessions dropped by filters) and manifest.json
+wrote 1 player data file(s) to world/players/data
+waiting for 127.0.0.1:25565 — start the benchmark server now
+127.0.0.1:25565 is up
+active=1 connected=1 failed=0 events=7 digs=1/1 places=1/1
+done — report in runs/20260721-212541/run.json
+```
+
+The pause is not a convenience: placing bench accounts needs the server
+**stopped**, because Paper reads player data at login and writes it back at
+logout, so a file written underneath a running server is ignored or
+overwritten. Replaying needs it **up**. `mcbench` checks by connecting rather
+than trusting the docs — it refuses to place accounts against a live server, and
+then waits for the port to open.
+
+Useful flags:
+
+| Flag | Effect |
+|------|--------|
+| `--target host:port` | benchmark server (default `127.0.0.1:25565`) |
+| `--players N` | bot count (default: one per captured session) |
+| `--minutes N` | loop traces to fill N minutes (default: one pass, then stop) |
+| `--import <prod>/world/players/data` | give bots the real players' gear |
+| `--traces <dir>` | reuse a compiled directory instead of recompiling |
+| `--write-scenario x.yaml` | dump the generated scenario to edit and reuse |
+| `--skip-place` | leave player data alone |
+
+The steps below are the same work done by hand, and are still what you want for
+anything the one-shot does not cover — a scenario you have tuned, a compile
+whose traces you reuse across many runs, or a server you do not control the
+lifecycle of. `mcbench` calls exactly these code paths in-process, not copies of
+them.
+
+## Workflow (the individual steps)
 
 ### 1. Capture (production, online-mode server)
 
-Drop `BenchCapture-1.0.0.jar` into the Paper server's `plugins/`. It writes
+Drop `BenchCapture-1.1.0-beta.jar` into the Paper server's `plugins/`. It writes
 `raw-*.bin` logs to the `output_path` in `config.yml`
 (default `/home/container/bench-capture/capture-logs`). Player UUIDs are hashed
 with a per-run salt before anything touches disk.
@@ -98,6 +160,16 @@ bin/trace-compiler \
   --min-duration 600 --max-duration 3600 --run-id 2026-07-18-2355
 ```
 
+A capture file that ends mid-frame — the normal result of killing a server, or
+of a full disk — costs only its own incomplete tail. The compiler keeps every
+complete frame in that file and every other file in the directory, and says what
+it lost:
+
+```
+WARNING: raw-20260720-210921-s0.bin: frame 47: capture file ends mid-frame;
+         keeping the events read before that point
+```
+
 ### 4. Place the bench accounts (benchmark server, stopped)
 
 ```bash
@@ -106,6 +178,13 @@ bin/bench-playerdata \
   --manifest host/traces-export/protocol-769/mixed-1h-benchmark/manifest.json \
   --prefix BENCH_ --count 500      # must match the scenario's target_players
 ```
+
+`--prefix` must match the scenario's `identity.username_prefix` exactly, and both
+cap it at **11 characters** — the account index adds five digits and Minecraft
+stops at sixteen. A longer prefix used to be truncated on both sides, which does
+not rename the accounts so much as merge them: every session logs in as the same
+player, the server kicks each new one as a duplicate login, and the run reports a
+wall of failed sessions with no stated cause. It is now refused up front.
 
 Skipping this step does not fail loudly — it fails quietly, which is worse. A
 bench account that has never logged in spawns at **world spawn**, so:
@@ -175,17 +254,33 @@ host/bench-runner.sh host/scenarios/1h-default.yaml <server-host> <server-port>
 The run writes `run.json` (peak concurrency, per-session results, a 5-second
 concurrency time series) and `metrics.prom` (Prometheus text) to the out dir.
 
-**Read `digs_confirmed`, not `events_replayed`.** Sending a dig packet proves
-nothing: the server silently drops one that is out of range or aimed at air, and
-`events_replayed` counts it either way, so a run that changed nothing looks
-identical to one that worked. `digs_confirmed` counts the `block_update` packets
-the server sent back showing the block actually gone, and the live log prints it
-as `digs=confirmed/sent`:
+**Read `digs_confirmed` and `places_confirmed`, not `events_replayed`.** Sending
+a block packet proves nothing: the server silently drops a dig that is out of
+range or aimed at air, and a placement whose target is not a solid block to build
+against, while `events_replayed` counts them either way — so a run that changed
+nothing looks identical to one that worked. The confirmed counters come from the
+`block_update` packets the server sent back, and the live log prints them as
+`confirmed/sent`:
 
 ```
-active=1 connected=1 failed=0 events=124 digs=12/12   <- working
-active=1 connected=1 failed=0 events=124 digs=0/12    <- sent, nothing broke
+active=1 connected=1 failed=0 events=124 digs=12/12 places=4/4   <- working
+active=1 connected=1 failed=0 events=124 digs=0/12  places=0/4   <- sent, world unchanged
+active=1 connected=1 failed=0 events=124 digs=0/0 into_air=12    <- trace and world disagree
 ```
+
+`into_air` means the bot was asked to break blocks that are not there. The
+client reads the chunks the server sends it and knows the state of every
+position its trace touches, so a dig at air is reported as what it is instead of
+being sent and counted. That check matters most when a bot is misplaced: most
+coordinates in a world are air, so without it a bot digging into empty space
+produced a pending dig that some *other* packet could then confirm — a failed
+placement at the same position sends `block_update(air)`, which is
+indistinguishable from "the block you broke is now air".
+
+Two more counters keep "could not check" separate from "checked and passed":
+`digs_unverifiable` (the chunk never arrived) and `chunks_unparsed` (the chunk
+format moved and `internal/mcproto/chunk.go` needs regenerating). Neither is
+ever folded into a success.
 
 A run also warns at login when the server put a bot somewhere other than where
 its trace was captured, which is the usual reason for `digs=0/N`:
@@ -257,7 +352,7 @@ round-trips; a replay integration test that drives a full session over a real TC
 socket in both compressed and uncompressed framing; and `interop-check`, which
 proves the Java plugin's encoding classes + zlib produce capture logs the Go
 reader decodes field-for-field. The plugin compiles against `paper-api` and
-packages to `BenchCapture-1.0.0.jar`.
+packages to `BenchCapture-1.1.0-beta.jar`.
 
 Reproduce the live validation quickly:
 

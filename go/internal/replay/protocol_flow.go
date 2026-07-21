@@ -161,12 +161,29 @@ func (s *Session) handlePlay(id int32, body []byte, onPlayReady func(), inConfig
 		_ = s.send(mcproto.SBPlayPositionLook,
 			mcproto.PositionLook(x, y, z, yaw, pitch, true))
 		onPlayReady()
+	case mcproto.CBPlayAddEntity:
+		// What the client is told exists nearby. Attacks are aimed with this.
+		if a, err := mcproto.ParseAddEntity(body); err == nil && s.entities != nil {
+			s.entities.add(a)
+		}
+	case mcproto.CBPlayRemoveEntities:
+		if ids, err := mcproto.ParseRemoveEntities(body); err == nil && s.entities != nil {
+			s.entities.remove(ids)
+		}
+	case mcproto.CBPlayLevelChunk:
+		s.readChunk(body)
+	case mcproto.CBPlaySectionBlocksUpdate:
+		if changes, err := mcproto.ParseSectionBlocksUpdate(body); err == nil && s.blocks != nil {
+			for p, st := range changes {
+				s.blocks.set(p[0], p[1], p[2], st)
+			}
+		}
 	case mcproto.CBPlayBlockUpdate:
 		// The server's verdict on a dig. Without this the run can only report
 		// that packets were sent, which is exactly the failure mode that makes a
 		// replay look successful while the world never changes.
 		if b, err := mcproto.ParseBlockUpdate(body); err == nil {
-			s.confirmDig(b)
+			s.confirmBlockUpdate(b)
 		}
 	case mcproto.CBPlayKeepAlive:
 		kid, err := mcproto.ParseKeepAlive(body)
@@ -209,6 +226,37 @@ func (s *Session) handlePlay(id int32, body []byte, onPlayReady func(), inConfig
 		return true
 	}
 	return false
+}
+
+// readChunk folds a chunk column into the block ledger.
+//
+// Only the positions the trace touches are kept — see blockLedger — but the
+// column still has to be walked in full to reach them, because chunk sections
+// are variable-length and there is nothing to seek by.
+func (s *Session) readChunk(body []byte) {
+	if s.blocks == nil {
+		return // this trace touches no blocks; nothing to verify
+	}
+	minY, known := s.blocks.minY()
+	if !known {
+		// The world's vertical origin is not in this packet, and the registry
+		// data that carries it is not parsed. Infer it from the column height,
+		// which is the same for every column, then use it for the rest of the run.
+		n, err := mcproto.CountChunkSections(body)
+		if err != nil || !s.blocks.setMinSectionY(n) {
+			s.blocks.noteUnparsed()
+			return
+		}
+		minY, _ = s.blocks.minY()
+	}
+	c, err := mcproto.ParseChunkBlocks(body, minY, s.blocks.wants)
+	if err != nil {
+		// The chunk format has moved. Say so by counting it: a dig that cannot
+		// be verified must not be reported as verified.
+		s.blocks.noteUnparsed()
+		return
+	}
+	s.blocks.applyChunk(c)
 }
 
 // applyTeleport folds a server teleport into the local view. Callers must hold
@@ -290,9 +338,14 @@ func (s *Session) holdUntil(t, deadline time.Time, stop, readerDone <-chan struc
 	}
 	ticker := time.NewTicker(50 * time.Millisecond)
 	defer ticker.Stop()
+	// One timer for the whole wait. time.After inside the select would arm a
+	// fresh one every tick, each held alive until its own full deadline — 20 per
+	// second per session, and none of them collectable early.
+	done := time.NewTimer(time.Until(t))
+	defer done.Stop()
 	for {
 		select {
-		case <-time.After(time.Until(t)):
+		case <-done.C:
 			return
 		case <-stop:
 			return

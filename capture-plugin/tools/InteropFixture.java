@@ -33,7 +33,8 @@ public final class InteropFixture {
         events.add(ev(2_000, pid, RawEvent.KIND_SPRINT_TOGGLE, Payloads.toggle(true)));
         events.add(ev(3_000, pid, RawEvent.KIND_DIG, Payloads.dig(2, 10, 64, -5, 1)));
         events.add(ev(4_000, pid, RawEvent.KIND_PLACE_BLOCK, Payloads.place(11, 64, -5, 1, 0)));
-        events.add(ev(5_000, pid, RawEvent.KIND_ATTACK_ENTITY, Payloads.attackEntity(3)));
+        events.add(ev(5_000, pid, RawEvent.KIND_ATTACK_ENTITY,
+                Payloads.entityRef("minecraft:zombie", 0)));
         events.add(ev(6_000, pid, RawEvent.KIND_CMD, Payloads.command("/say hello world")));
         // Negative coarse chunk coords exercise 5-byte VarInt encoding.
         RawEvent neg = ev(7_000, pid, RawEvent.KIND_MOVE,
@@ -64,6 +65,14 @@ public final class InteropFixture {
                                            "minecraft:iron_helmet",
                                            "minecraft:shield" },
                             new int[] { 1, 1, 1 }, 3)));
+            // The kinds captured from the wire rather than from Bukkit events.
+            more.add(ev(12_000, pid, RawEvent.KIND_HELD_SLOT, Payloads.heldSlot(4)));
+            more.add(ev(13_000, pid, RawEvent.KIND_CHAT,
+                    Payloads.chat("selling 64 diamonds at spawn")));
+            more.add(ev(14_000, pid, RawEvent.KIND_DROP_ITEM, Payloads.dropItem(true)));
+            more.add(ev(15_000, pid, RawEvent.KIND_SWAP_HANDS, new byte[0]));
+            // A dig start, which capture could not observe until it read packets.
+            more.add(ev(16_000, pid, RawEvent.KIND_DIG, Payloads.dig(0, 10, 64, -5, 1)));
             w.writeFrame(more, 300L, 400L);
         }
         System.out.println("wrote " + outFile);

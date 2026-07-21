@@ -41,8 +41,15 @@ Reference: Go `internal/rawevent`, Java `com.mcbench.capture.model.RawEvent`.
 0 MOVE   1 SPRINT_TOGGLE  2 SNEAK_TOGGLE  3 DIG    4 PLACE_BLOCK
 5 USE_ITEM  6 INTERACT_ENTITY  7 ATTACK_ENTITY  8 INV_OPEN  9 INV_CLICK
 10 INV_CLOSE  11 CMD  12 MOB_SPAWN  13 MOB_DESPAWN  14 MARKER
-15 CREATIVE_SET  16 REANCHOR  17 INVENTORY_SNAPSHOT
+15 CREATIVE_SET  16 REANCHOR  17 INVENTORY_SNAPSHOT  18 HELD_SLOT
+19 CHAT  20 DROP_ITEM  21 SWAP_HANDS
 ```
+
+Kinds 18–21, and all three `DIG` actions, are captured from the client's own
+packets on the connection's Netty thread rather than from Bukkit events — see
+`PacketCaptureListener`. A Bukkit event describes an action after the server has
+applied it, which is too late for anything whose *timing* matters and blind to
+anything the server refused.
 
 ## 2. Payload encodings
 
@@ -50,11 +57,10 @@ Reference: Go `internal/rawevent`, Java `com.mcbench.capture.model.RawEvent`.
 |------|--------|
 | `MOVE` | `dx dy dz yaw pitch` (5× `f32le`), `on_ground` (`bool`) |
 | `SPRINT_TOGGLE` / `SNEAK_TOGGLE` | `on` (`bool`) |
-| `DIG` | `action` `x` `y` `z` `face` (5× `VarInt`); action 0=start 1=cancel 2=finish |
-| `PLACE_BLOCK` | `x` `y` `z` `face` `hand` (5× `VarInt`) |
+| `DIG` | `action` `x` `y` `z` `face` (5× `VarInt`); action 0=start 1=cancel 2=finish. All three are captured, from the wire — a break spans the ticks it really took, and a dig the player abandoned is recorded too |
+| `PLACE_BLOCK` | `x` `y` `z` `face` `hand` (5× `VarInt`) — the block **clicked against** and which face of it, *not* the block that appeared; the new block lands one step along `face`, which is how `use_item_on` expresses a placement |
 | `USE_ITEM` | `hand` `item_id` (2× `VarInt`) |
-| `INTERACT_ENTITY` | `target_hint` `action` (2× `VarInt`) |
-| `ATTACK_ENTITY` | `target_hint` (`VarInt`) |
+| `INTERACT_ENTITY` / `ATTACK_ENTITY` | `type_key` (`String`) `hand` (`VarInt`) — the entity's **registry key** (`minecraft:zombie`), which `mcproto.EntityTypeID` turns into the protocol id `add_entity` reports. It used to be `EntityType.ordinal()`, an enum position with no relation to any protocol id, which is why attacks could only ever be replayed as an animation |
 | `INV_OPEN` | `container_type` (`VarInt`), `has_pos` (`bool`), then if set `x` `y` `z` (3× `VarInt`) — the container's block position, used to trigger the open on replay |
 | `INV_CLICK` | `window_id` `slot` `button` `click_type` (4× `VarInt`) — captured `window_id` is ignored on replay (a live id is used) |
 | `INV_CLOSE` | `window_id` (`VarInt`) |
@@ -65,6 +71,10 @@ Reference: Go `internal/rawevent`, Java `com.mcbench.capture.model.RawEvent`.
 | `REANCHOR` | `x` `y` `z` (3× `Float64BE`), `yaw` `pitch` (2× `Float32BE`), `dimension` (`VarInt`) — an absolute position the server moved the player to |
 | `INVENTORY_SNAPSHOT` | `selected_slot` (`VarInt`), `item_count` (`VarInt`), then per item: `slot` (`VarInt`), `id` (`String`), `count` (`VarInt`) — the player's inventory at login |
 | `CREATIVE_SET` | `slot` `item_id` `count` (3× `VarInt`) — creative inventory set; server writes the item straight into the slot (replay/demo only) |
+| `HELD_SLOT` | `slot` (`VarInt`, 0–8) — the hotbar slot switched to. Which tool is in hand decides how long a block takes to break, so a bot that never switches replays a mining trace at the wrong speed or not at all |
+| `CHAT` | `message` (`String`) — one of the few actions whose server cost scales with the population rather than the sender |
+| `DROP_ITEM` | `full_stack` (`bool`) — ctrl-Q versus Q; both spawn an item entity that then ticks |
+| `SWAP_HANDS` | empty |
 
 Only the `session_start` marker carries the trailing position, and it is the one
 exact position in the whole format — every other event locates itself with the

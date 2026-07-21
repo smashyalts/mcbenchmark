@@ -11,6 +11,30 @@ java -DbundlerMainClass=net.minecraft.data.Main -jar cache/mojang_<ver>.jar --re
 # → generated/reports/registries.json  (item/entity ids)
 ```
 
+Packet **shapes** move as well as ids, and the report does not show shapes. Two
+that changed under us in 26.1.2, both found by a server that dropped the
+connection rather than by reading a wiki:
+
+- **`interact` was split.** It used to carry an action-type discriminator (0
+  interact, 1 attack, 2 interact-at). Attacking is now its own packet,
+  `attack` (`0x01`), whose whole body is one VarInt. Sending the old union
+  fails to decode: *"Failed to decode packet 'serverbound/minecraft:interact'"*.
+- **`chat` grew a trailing checksum byte** inside `LastSeenMessages.Update`.
+  Omitting it leaves the server one byte short, reported as a corrupt packet
+  rather than as anything to do with chat.
+
+When a shape is in doubt, read it off the server's own codec instead of
+guessing — the jar the data report came from also contains the decoder:
+
+```
+unzip -o cache/mojang_<ver>.jar META-INF/versions/<ver>/server-<ver>.jar
+javap -p -c net/minecraft/network/protocol/game/ServerboundChatPacket.class
+```
+
+Paper ships Mojang-mapped, so the field order reads straight out of the
+constructor. That is how the chat layout above was established, checksum and
+all, before a single packet was sent.
+
 Retargeting a different version means regenerating that report, updating
 `ids.go`, and verifying the payload shapes of the packets the client builds
 (login/config IDs are stable across versions; play-phase IDs shift frequently).
@@ -50,10 +74,14 @@ a clear error.
 | `MOVE` | Position+Look (absolute position accumulated from deltas) |
 | `SPRINT_TOGGLE` | Entity Action start/stop sprinting |
 | `SNEAK_TOGGLE` | Entity Action start/stop sneaking |
-| `DIG` | Player Action (block dig) + Arm Animation |
+| `DIG` | Player Action (block dig) + Arm Animation. Start/abort/finish all replay verbatim; a finish with no start (traces recorded before packet capture) still gets a synthetic start, counted as `dig_starts_synthesised` |
 | `PLACE_BLOCK` | Use Item On (block place) |
 | `USE_ITEM` | Use Item |
-| `ATTACK_ENTITY` / `INTERACT_ENTITY` | Arm Animation (swing) |
+| `ATTACK_ENTITY` | Attack (`0x01`) at a live entity of the captured type, found by tracking `add_entity`/`remove_entities`, plus Arm Animation. Counted as `attacks_on_type` / `attacks_off_type` / `attacks_no_target` |
+| `INTERACT_ENTITY` | Interact (`0x1A`) at the same |
+| `HELD_SLOT` | Set Carried Item (a **short**, not a VarInt) |
+| `CHAT` | Chat, unsigned, empty acknowledgement window |
+| `DROP_ITEM` / `SWAP_HANDS` | Player Action statuses 3/4 and 6 |
 | `CMD` | Chat Command (unsigned), leading `/` stripped |
 | `INV_OPEN` | Use Item On at the captured container position (server replies with `open_screen`) |
 | `INV_CLICK` | Container Click, using the **live** window/state id |
@@ -94,6 +122,28 @@ click is what matters.
 
 Events with no serverbound analogue are counted in the run report
 (`events_skipped`) so coverage is never silently overstated.
+
+## Block state tracking
+
+The client parses `level_chunk_with_light` to learn the state of the blocks its
+trace touches, so a dig can be told apart from a dig into air. Only the
+positions the trace digs or builds at are kept — a column still has to be walked
+in full to reach them, since chunk sections are variable-length, but nothing
+else is stored, which is what keeps hundreds of bots affordable.
+
+Section layout, read off `LevelChunkSection.write` and
+`PalettedContainer.Data.write` rather than assumed. Two details are easy to miss
+and each corrupts every section after the first:
+
+- a section writes **two** shorts, non-empty block count *and* fluid count;
+- the packed long array has **no length prefix** — the count follows from
+  bits-per-entry.
+
+The parse is self-checking: the section buffer is length-prefixed, so leftover
+or missing bytes surface as an error and the chunk is counted in
+`chunks_unparsed`. An unreadable chunk makes its blocks *unverifiable*, which is
+reported separately from verified — the one thing this must never do is let a
+format change quietly turn into confident wrong answers.
 
 ## Position handling
 

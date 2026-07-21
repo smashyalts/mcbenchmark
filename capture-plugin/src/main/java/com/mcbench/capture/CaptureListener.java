@@ -16,7 +16,6 @@ import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
 import org.bukkit.event.block.Action;
-import org.bukkit.event.block.BlockBreakEvent;
 import org.bukkit.event.block.BlockPlaceEvent;
 import org.bukkit.event.entity.CreatureSpawnEvent;
 import org.bukkit.event.entity.EntityDamageByEntityEvent;
@@ -43,7 +42,7 @@ import org.bukkit.event.player.PlayerToggleSprintEvent;
  * This covers the cold event kinds only — the ones that fire a few times per
  * player per minute. Movement, the one kind whose rate scales with player count
  * and tick rate, is captured from packets instead (see
- * {@link PacketMovementListener}) and never reaches the main thread.
+ * {@link PacketCaptureListener}) and never reaches the main thread.
  */
 public final class CaptureListener implements Listener {
     private final CaptureManager mgr;
@@ -84,7 +83,7 @@ public final class CaptureListener implements Listener {
         mgr.record(p.getUniqueId(), RawEvent.KIND_MARKER,
                 Payloads.markerAt("session_start", loc.getX(), loc.getY(), loc.getZ(),
                         loc.getYaw(), loc.getPitch()), loc);
-        index.update(p.getUniqueId(), loc.getX(), loc.getY(), loc.getZ());
+        index.add(p.getUniqueId(), loc.getX(), loc.getY(), loc.getZ());
         recordInventory(p, loc);
     }
 
@@ -159,7 +158,7 @@ public final class CaptureListener implements Listener {
     // Movement is NOT captured here. PlayerMoveEvent only fires for moves the
     // server already accepted, and only when something actually changed, so it
     // cannot see rejected movement or idle position packets — both of which are
-    // real server load. PacketMovementListener captures it from the wire
+    // real server load. PacketCaptureListener captures it from the wire
     // instead, on the connection's Netty thread.
 
     /**
@@ -226,21 +225,65 @@ public final class CaptureListener implements Listener {
                 Payloads.toggle(e.isSneaking()), e.getPlayer().getLocation());
     }
 
-    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
-    public void onBreak(BlockBreakEvent e) {
-        var b = e.getBlock();
-        // action 2 = finish; face is unknown from this event, use 1 (up) as a
-        // stable placeholder consumed by the replay client.
-        mgr.record(e.getPlayer().getUniqueId(), RawEvent.KIND_DIG,
-                Payloads.dig(2, b.getX(), b.getY(), b.getZ(), 1), b.getLocation());
-    }
+    // Digging is NOT captured here any more. BlockBreakEvent fires once the block
+    // is already gone, so it could only ever produce a lone "finish" with no
+    // start, no face and no duration — replay had to invent the start, and a
+    // break that really took two seconds of per-tick destroy-progress work
+    // collapsed into a single tick. It also never fired for a dig the player
+    // began and abandoned, which costs the server real work. All of that arrives
+    // intact on the packet path; see PacketCaptureListener.onAction.
 
+    /**
+     * Records a placement the way the protocol expresses it: the block that was
+     * <em>clicked against</em>, plus the face of it that was clicked.
+     *
+     * This is not the block that appeared, and the difference is the whole event.
+     * The serverbound packet is use_item_on, and the server derives where the
+     * block goes from clicked position + face. Recording the placed block instead
+     * — which is what this did, with the face hardcoded to "up" — asks the server
+     * to place one block too high, against a position that in a pristine replay
+     * world is air. You cannot place against air, so useItemOn returns PASS and
+     * nothing happens at all.
+     *
+     * It fails exactly the way the missing dig START did: silently, with the run
+     * still counting the event as replayed. Hence places_confirmed on the replay
+     * side, which reports what the server actually built.
+     */
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onPlace(BlockPlaceEvent e) {
-        var b = e.getBlock();
+        var placed = e.getBlock();
+        var against = e.getBlockAgainst();
         int hand = e.getHand() != null && e.getHand().name().equals("OFF_HAND") ? 1 : 0;
+        int face = faceBetween(against, placed);
+        // A replaceable target (tall grass, water) is clicked directly rather than
+        // against a neighbour, and then the two blocks are the same one.
+        var clicked = (against == null) ? placed : against;
         mgr.record(e.getPlayer().getUniqueId(), RawEvent.KIND_PLACE_BLOCK,
-                Payloads.place(b.getX(), b.getY(), b.getZ(), 1, hand), b.getLocation());
+                Payloads.place(clicked.getX(), clicked.getY(), clicked.getZ(), face, hand),
+                placed.getLocation());
+    }
+
+    /**
+     * The block face pointing from {@code against} towards {@code placed}, in the
+     * protocol's numbering: 0 down, 1 up, 2 north, 3 south, 4 west, 5 east.
+     *
+     * Returns up when the two are the same block or the neighbour is unknown,
+     * which is what a client sends when it clicks a replaceable block directly.
+     */
+    private static int faceBetween(org.bukkit.block.Block against, org.bukkit.block.Block placed) {
+        if (against == null) {
+            return 1;
+        }
+        int dx = placed.getX() - against.getX();
+        int dy = placed.getY() - against.getY();
+        int dz = placed.getZ() - against.getZ();
+        if (dy == 1) return 1;
+        if (dy == -1) return 0;
+        if (dz == -1) return 2;
+        if (dz == 1) return 3;
+        if (dx == -1) return 4;
+        if (dx == 1) return 5;
+        return 1; // same block: clicked a replaceable target
     }
 
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
@@ -259,9 +302,10 @@ public final class CaptureListener implements Listener {
 
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onInteractEntity(PlayerInteractEntityEvent e) {
-        int hint = e.getRightClicked().getType().ordinal();
+        int hand = e.getHand() != null && e.getHand().name().equals("OFF_HAND") ? 1 : 0;
         mgr.record(e.getPlayer().getUniqueId(), RawEvent.KIND_INTERACT_ENTITY,
-                Payloads.interactEntity(hint, 0), e.getPlayer().getLocation());
+                Payloads.entityRef(e.getRightClicked().getType().getKey().toString(), hand),
+                e.getPlayer().getLocation());
     }
 
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
@@ -269,9 +313,9 @@ public final class CaptureListener implements Listener {
         if (!(e.getDamager() instanceof Player p)) {
             return;
         }
-        int hint = e.getEntity().getType().ordinal();
         mgr.record(p.getUniqueId(), RawEvent.KIND_ATTACK_ENTITY,
-                Payloads.attackEntity(hint), p.getLocation());
+                Payloads.entityRef(e.getEntity().getType().getKey().toString(), 0),
+                p.getLocation());
     }
 
     @EventHandler(priority = EventPriority.MONITOR)
@@ -331,9 +375,11 @@ public final class CaptureListener implements Listener {
         if (near == null) {
             return;
         }
-        mgr.record(near, RawEvent.KIND_MOB_SPAWN,
-                Payloads.mobSpawn(ent.getType().ordinal(), e.getSpawnReason().name()),
-                at);
+        // Allocation-free path: mob spawn rate is set by farms and spawners, not
+        // by players, so this is the one main-thread kind that can arrive in
+        // floods. See CaptureManager.recordMobEvent.
+        mgr.recordMobEvent(near, RawEvent.KIND_MOB_SPAWN, ent.getType().ordinal(),
+                e.getSpawnReason().name(), at);
     }
 
     @EventHandler(priority = EventPriority.MONITOR)
@@ -344,7 +390,6 @@ public final class CaptureListener implements Listener {
         if (near == null) {
             return;
         }
-        mgr.record(near, RawEvent.KIND_MOB_DESPAWN,
-                Payloads.mobDespawn(ent.getType().ordinal(), 0), at);
+        mgr.recordMobEvent(near, RawEvent.KIND_MOB_DESPAWN, ent.getType().ordinal(), null, at);
     }
 }

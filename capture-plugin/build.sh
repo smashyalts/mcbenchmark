@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Builds BenchCapture-1.0.0.jar using only a JDK (>=21) + curl — no Maven needed.
+# Builds BenchCapture-1.1.0-beta.jar using only a JDK (>=21) + curl — no Maven needed.
 # It fetches the paper-api compile dependencies into libs/ (cached) and packages
 # the plugin jar. For a Maven build instead, run: mvn -q package
 set -euo pipefail
@@ -39,8 +39,8 @@ CP=$(printf "libs/%s${SEP}" paper-api.jar annotations.jar adventure-api.jar adve
 rm -rf out && mkdir -p out
 javac --release 21 -cp "$CP" -d out $(find src/main/java -name '*.java')
 cp src/main/resources/plugin.yml src/main/resources/config.yml out/
-rm -f BenchCapture-1.0.0.jar
-jar --create --file BenchCapture-1.0.0.jar -C out .
+rm -f BenchCapture-1.1.0-beta.jar
+jar --create --file BenchCapture-1.1.0-beta.jar -C out .
 
 # Ring and spatial-index checks. These cover the lock-free handoff and the
 # packed slot layout, where a mistake corrupts capture data silently rather
@@ -49,4 +49,4 @@ javac --release 21 -cp "${CP}out" -d out tools/RingTest.java
 java -cp "${CP}out" RingTest
 
 rm -rf out
-echo "built BenchCapture-1.0.0.jar"
+echo "built BenchCapture-1.1.0-beta.jar"

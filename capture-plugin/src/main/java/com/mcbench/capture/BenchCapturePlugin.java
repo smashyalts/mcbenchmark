@@ -32,7 +32,7 @@ public final class BenchCapturePlugin extends JavaPlugin {
     private final List<WriterTask> writerTasks = new ArrayList<>();
     private ScheduledExecutorService flushPool;
     private BukkitTask tickClock;
-    private PacketMovementListener packetListener;
+    private PacketCaptureListener packetListener;
 
     // NOTE: there is deliberately no onLoad() here, and nothing in this plugin
     // calls PacketEvents.setAPI(), load(), init() or terminate().
@@ -119,7 +119,7 @@ public final class BenchCapturePlugin extends JavaPlugin {
             getServer().getPluginManager().disablePlugin(this);
             return;
         }
-        packetListener = new PacketMovementListener(manager, index);
+        packetListener = new PacketCaptureListener(manager, index);
         PacketEvents.getAPI().getEventManager().registerListener(packetListener);
 
         // Counts ticks so the writer can report the server's real TPS alongside

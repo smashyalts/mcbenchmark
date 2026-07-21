@@ -39,15 +39,15 @@ const (
 
 // Configuration, clientbound.
 const (
-	CBConfigCookieRequest  int32 = 0x00
-	CBConfigPluginMessage  int32 = 0x01 // custom_payload
-	CBConfigDisconnect     int32 = 0x02
-	CBConfigFinish         int32 = 0x03 // finish_configuration
-	CBConfigKeepAlive      int32 = 0x04
-	CBConfigPing           int32 = 0x05
-	CBConfigRegistryData   int32 = 0x07
-	CBConfigKnownPacks     int32 = 0x0E // select_known_packs
-	CBConfigCodeOfConduct  int32 = 0x13 // code_of_conduct (26.x); requires accept before finish
+	CBConfigCookieRequest int32 = 0x00
+	CBConfigPluginMessage int32 = 0x01 // custom_payload
+	CBConfigDisconnect    int32 = 0x02
+	CBConfigFinish        int32 = 0x03 // finish_configuration
+	CBConfigKeepAlive     int32 = 0x04
+	CBConfigPing          int32 = 0x05
+	CBConfigRegistryData  int32 = 0x07
+	CBConfigKnownPacks    int32 = 0x0E // select_known_packs
+	CBConfigCodeOfConduct int32 = 0x13 // code_of_conduct (26.x); requires accept before finish
 )
 
 // Configuration, serverbound.
@@ -98,15 +98,34 @@ const (
 	SBPlayArmAnimation       int32 = 0x3F // swing
 	SBPlayBlockPlace         int32 = 0x42 // use_item_on
 	SBPlayUseItem            int32 = 0x43 // use_item
+	SBPlaySetCarriedItem     int32 = 0x35 // set_carried_item (hotbar slot)
+	SBPlayChat               int32 = 0x09 // chat
+	SBPlayAttack             int32 = 0x01 // attack (26.x split this out of interact)
+	SBPlayInteract           int32 = 0x1A // interact (right-click an entity)
+)
+
+// Clientbound packets the replay client reads to track the live world.
+const (
+	CBPlayAddEntity           int32 = 0x01 // add_entity
+	CBPlayRemoveEntities      int32 = 0x4D // remove_entities
+	CBPlayLevelChunk          int32 = 0x2D // level_chunk_with_light
+	CBPlaySectionBlocksUpdate int32 = 0x54 // section_blocks_update
 )
 
 // Block-dig statuses (serverbound player_action). The server runs a small state
 // machine across them: it only accepts a "stop" for the position it previously
 // saw a "start" for.
+//
+// The list continues past digging: the same packet carries dropping items and
+// swapping hands, which is why they are replayed through it rather than through
+// an inventory click.
 const (
-	DigStart  int32 = 0
-	DigAbort  int32 = 1
-	DigFinish int32 = 2
+	DigStart      int32 = 0
+	DigAbort      int32 = 1
+	DigFinish     int32 = 2
+	DropItemStack int32 = 3 // drop the whole stack (ctrl-Q)
+	DropItem      int32 = 4 // drop one item (Q)
+	SwapHands     int32 = 6 // offhand swap (F)
 )
 
 // Entity action IDs (serverbound player_command).

@@ -1,5 +1,6 @@
 import com.mcbench.capture.model.EventRing;
 import com.mcbench.capture.model.PlayerIndex;
+import com.mcbench.capture.model.Payloads;
 import com.mcbench.capture.model.PlayerSession;
 import com.mcbench.capture.model.RawEvent;
 
@@ -28,6 +29,9 @@ public final class RingTest {
         indexFindsNearestAcrossCellBoundary();
         indexUpdatesCellOnMove();
         indexRemoveEvicts();
+        indexUpdateAfterRemoveDoesNotResurrect();
+        indexConcurrentCellMovesLeaveNoStaleEntry();
+        inPlaceMobEncodingMatchesPayloads();
         twoProducersDoNotStarveEachOther();
         encodeToMatchesDrainTo();
 
@@ -305,8 +309,8 @@ public final class RingTest {
         UUID a = new UUID(1, 1);
         UUID b = new UUID(2, 2);
         // Deliberately either side of a 64-block cell edge.
-        idx.update(a, 63, 64, 63);
-        idx.update(b, 65, 64, 65);
+        idx.add(a, 63, 64, 63);
+        idx.add(b, 65, 64, 65);
         check(a.equals(idx.nearest(62, 64, 62)), "should find A");
         check(b.equals(idx.nearest(70, 64, 70)), "should find B across the boundary");
         // Beyond the 48-block attribution radius, nothing should match.
@@ -316,7 +320,7 @@ public final class RingTest {
     private static void indexUpdatesCellOnMove() {
         PlayerIndex idx = new PlayerIndex();
         UUID a = new UUID(1, 1);
-        idx.update(a, 10, 64, 10);
+        idx.add(a, 10, 64, 10);
         check(a.equals(idx.nearest(12, 64, 12)), "should find A at origin");
         idx.update(a, 1000, 64, 1000); // crosses many cells
         check(idx.nearest(12, 64, 12) == null, "stale cell entry left behind");
@@ -327,10 +331,92 @@ public final class RingTest {
     private static void indexRemoveEvicts() {
         PlayerIndex idx = new PlayerIndex();
         UUID a = new UUID(1, 1);
-        idx.update(a, 10, 64, 10);
+        idx.add(a, 10, 64, 10);
         idx.remove(a);
         check(idx.nearest(10, 64, 10) == null, "removed player still found");
         check(idx.size() == 0, "size should be 0 after remove");
+    }
+
+    /**
+     * A movement packet still in flight when the player quits must not put them
+     * back. The packet listener checks the session first, but that check and this
+     * call are two steps with a quit possible in between; an update that created
+     * entries would leave a player nothing ever removes again.
+     */
+    private static void indexUpdateAfterRemoveDoesNotResurrect() {
+        PlayerIndex idx = new PlayerIndex();
+        UUID a = new UUID(1, 1);
+        idx.add(a, 10, 64, 10);
+        idx.remove(a);
+        idx.update(a, 12, 64, 12); // late packet
+        check(idx.size() == 0, "late update resurrected a departed player, size=" + idx.size());
+        check(idx.nearest(12, 64, 12) == null, "departed player is findable again");
+    }
+
+    /**
+     * Two threads relocating the same player must not strand them in a cell the
+     * entry no longer names — the main thread calls update on teleport, respawn
+     * and world change while that player's Netty thread is capturing movement,
+     * which is exactly when the cell changes.
+     */
+    private static void indexConcurrentCellMovesLeaveNoStaleEntry() throws Exception {
+        PlayerIndex idx = new PlayerIndex();
+        UUID a = new UUID(1, 1);
+        idx.add(a, 0, 64, 0);
+        final int rounds = 20000;
+        Thread t = new Thread(() -> {
+            for (int i = 0; i < rounds; i++) {
+                idx.update(a, (i % 40) * 64, 64, 0); // walks across cells
+            }
+        });
+        t.start();
+        for (int i = 0; i < rounds; i++) {
+            idx.update(a, 5000 + (i % 40) * 64, 64, 0); // "teleports" elsewhere
+        }
+        t.join();
+        // One player is one entry in one cell. A stale copy cannot be found by
+        // probing positions — it points at the same object, so it reports the
+        // player's real current position — so count instead.
+        check(idx.cellEntries() == 1,
+                "player stranded in " + (idx.cellEntries() - 1) + " stale cell(s)");
+        idx.remove(a);
+        check(idx.size() == 0, "size should be 0 after remove");
+        check(idx.cellEntries() == 0,
+                "remove left " + idx.cellEntries() + " cell entry/entries behind");
+    }
+
+    /**
+     * The in-place mob encoding must produce exactly what Payloads produced.
+     *
+     * CaptureManager.recordMobEvent writes the payload straight into a ring slot
+     * to keep the main thread allocation-free under mob floods. That is a second
+     * implementation of a wire format the Go decoder already reads, so it is
+     * checked against the original rather than assumed equal.
+     */
+    private static void inPlaceMobEncodingMatchesPayloads() {
+        byte[] buf = new byte[EventRing.INLINE_PAYLOAD];
+
+        // Spawn: varInt(entityType), string(reason).
+        int off = EventRing.putVarInt(buf, 0, 315);
+        off = EventRing.putAscii(buf, off, "SPAWNER", EventRing.INLINE_PAYLOAD - off - 5);
+        check(java.util.Arrays.equals(java.util.Arrays.copyOf(buf, off),
+                        Payloads.mobSpawn(315, "SPAWNER")),
+                "in-place mob_spawn encoding differs from Payloads.mobSpawn");
+
+        // Despawn: varInt(entityType), varInt(reason).
+        off = EventRing.putVarInt(buf, 0, 7);
+        off = EventRing.putVarInt(buf, off, 0);
+        check(java.util.Arrays.equals(java.util.Arrays.copyOf(buf, off),
+                        Payloads.mobDespawn(7, 0)),
+                "in-place mob_despawn encoding differs from Payloads.mobDespawn");
+
+        // A tag longer than the slot allows is truncated, never written past the
+        // slot into its neighbour.
+        String huge = "X".repeat(200);
+        off = EventRing.putVarInt(buf, 0, 1);
+        off = EventRing.putAscii(buf, off, huge, EventRing.INLINE_PAYLOAD - off - 5);
+        check(off <= EventRing.INLINE_PAYLOAD,
+                "oversized tag ran past the slot: " + off + " > " + EventRing.INLINE_PAYLOAD);
     }
 
     private static int readInt(byte[] b) {

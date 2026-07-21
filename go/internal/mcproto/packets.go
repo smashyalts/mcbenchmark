@@ -2,6 +2,7 @@ package mcproto
 
 import (
 	"crypto/md5"
+	"fmt"
 
 	"mcbench/internal/mcwire"
 )
@@ -351,11 +352,6 @@ type BlockUpdate struct {
 	StateID int32
 }
 
-// AirStateID is the global block-state id of minecraft:air, which is always 0.
-// A block_update carrying it at a position we dug is the server confirming the
-// block is gone.
-const AirStateID int32 = 0
-
 // ParseBlockUpdate decodes a clientbound block_update body.
 func ParseBlockUpdate(body []byte) (BlockUpdate, error) {
 	var b BlockUpdate
@@ -367,6 +363,172 @@ func ParseBlockUpdate(body []byte) (BlockUpdate, error) {
 	b.X, b.Y, b.Z = unpackBlockPos(packed)
 	b.StateID, err = r.VarInt()
 	return b, err
+}
+
+// Chat builds the serverbound chat body.
+//
+// The layout is not guesswork — it is what the server's own decoder reads, in
+// order (net.minecraft.network.protocol.game.ServerboundChatPacket):
+//
+//	writeUtf(message, 256)
+//	writeInstant(timestamp)        // long, epoch millis
+//	writeLong(salt)
+//	writeNullable(signature)       // bool present, then 256 bytes if set
+//	LastSeenMessages.Update.write: // writeVarInt(offset)
+//	                               // writeFixedBitSet(acknowledged, 20) = 3 B
+//	                               // writeByte(checksum)
+//
+// The trailing checksum byte is easy to miss: it was added after 1.21.4 and
+// omitting it leaves the server one byte short, which it reports as a corrupt
+// packet rather than as a chat problem.
+//
+// Sent unsigned, with an empty acknowledgement window — an offline-mode server
+// does not verify signatures, and a client that has seen no messages has
+// nothing to acknowledge.
+func Chat(message string, timestampMs int64, salt int64) []byte {
+	if len(message) > 256 {
+		message = message[:256]
+	}
+	w := mcwire.NewWriter()
+	w.String(message)
+	w.Int64BE(timestampMs)
+	w.Int64BE(salt)
+	w.Bool(false) // no signature
+	w.VarInt(0)   // last-seen offset
+	w.Byte(0)     // 20-bit acknowledged bitset, all clear
+	w.Byte(0)     //
+	w.Byte(0)     //
+	w.Byte(0)     // checksum: 0 means "not computed"
+	return w.Bytes()
+}
+
+// SetCarriedItem builds the serverbound set_carried_item body: which hotbar
+// slot (0-8) the player switched to.
+//
+// The slot is a short, not a VarInt — the one field in this packet, and the one
+// thing easy to get wrong.
+func SetCarriedItem(slot int32) []byte {
+	w := mcwire.NewWriter()
+	w.Uint16BE(uint16(int16(slot)))
+	return w.Bytes()
+}
+
+// Attack builds the serverbound attack body: one VarInt, the entity id.
+//
+// Attacking is the whole reason to send this rather than a bare swing: a swing
+// is animation, an attack is damage, aggro, death, drops and XP. It needs a
+// live entity id, which only the running server can supply — see entities.go.
+//
+// 26.x split this out of the interact packet, which until then carried an
+// action-type discriminator (0 interact, 1 attack, 2 interact-at). That union
+// is gone: interact is now only right-clicking, and attacking has its own
+// packet with its own id. Sending the old shape is not misread, it fails to
+// decode and the server drops the connection.
+func Attack(entityID int32) []byte {
+	w := mcwire.NewWriter()
+	w.VarInt(entityID)
+	return w.Bytes()
+}
+
+// InteractAt builds the serverbound interact body — right-clicking an entity.
+//
+//	VAR_INT entityId
+//	InteractionHand           // VarInt: 0 main, 1 off
+//	Vec3.LP_STREAM_CODEC      // hit position, relative to the entity
+//	BOOL usingSecondaryAction
+//
+// The position uses LpVec3, a variable-length packed encoding whose writer
+// emits a single zero byte for any vector shorter than 3.05e-5 — so a hit at
+// the entity's own origin, which is what replay claims, is exactly one 0x00.
+func InteractAt(entityID int32, hand int32, sneaking bool) []byte {
+	w := mcwire.NewWriter()
+	w.VarInt(entityID)
+	w.VarInt(hand)
+	w.Byte(0) // LpVec3 zero
+	w.Bool(sneaking)
+	return w.Bytes()
+}
+
+// AddEntity is the clientbound add_entity packet, trimmed to what the replay
+// client needs to aim at something: who it is, what it is, and where.
+type AddEntity struct {
+	EntityID int32
+	TypeID   int32
+	X, Y, Z  float64
+}
+
+// ParseAddEntity decodes add_entity up to the coordinates and stops. The tail
+// (rotation, head yaw, data, velocity) is not needed and skipping it keeps this
+// insensitive to changes there.
+func ParseAddEntity(body []byte) (AddEntity, error) {
+	var a AddEntity
+	r := mcwire.NewReader(body)
+	var err error
+	if a.EntityID, err = r.VarInt(); err != nil {
+		return a, err
+	}
+	if _, err = r.Bytes(16); err != nil { // entity UUID
+		return a, err
+	}
+	if a.TypeID, err = r.VarInt(); err != nil {
+		return a, err
+	}
+	if a.X, err = r.Float64BE(); err != nil {
+		return a, err
+	}
+	if a.Y, err = r.Float64BE(); err != nil {
+		return a, err
+	}
+	a.Z, err = r.Float64BE()
+	return a, err
+}
+
+// ParseRemoveEntities decodes the clientbound remove_entities id list.
+func ParseRemoveEntities(body []byte) ([]int32, error) {
+	r := mcwire.NewReader(body)
+	n, err := r.VarInt()
+	if err != nil {
+		return nil, err
+	}
+	if n < 0 || int(n) > r.Remaining() {
+		return nil, fmt.Errorf("mcproto: implausible remove_entities count %d", n)
+	}
+	out := make([]int32, 0, n)
+	for i := int32(0); i < n; i++ {
+		id, err := r.VarInt()
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	return out, nil
+}
+
+// BlockPlaceRequest is the serverbound use_item_on as the server reads it: the
+// block that was clicked and which face of it. The new block goes one step
+// along that face — the position is not the placed block.
+type BlockPlaceRequest struct {
+	Hand    int32
+	X, Y, Z int32
+	Face    int32
+}
+
+// ParseBlockPlace decodes a use_item_on body. Used by tests to check the client
+// asks for what it means to ask for; the real server does the same arithmetic.
+func ParseBlockPlace(body []byte) (BlockPlaceRequest, error) {
+	var p BlockPlaceRequest
+	r := mcwire.NewReader(body)
+	var err error
+	if p.Hand, err = r.VarInt(); err != nil {
+		return p, err
+	}
+	packed, err := r.Int64BE()
+	if err != nil {
+		return p, err
+	}
+	p.X, p.Y, p.Z = unpackBlockPos(packed)
+	p.Face, err = r.VarInt()
+	return p, err
 }
 
 // unpackBlockPos reverses blockPos. Each field is sign-extended from its own

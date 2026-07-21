@@ -112,24 +112,36 @@ func (s *Session) dispatch(e tracefile.TraceEvent) {
 			handled = false
 			break
 		}
-		// A dig is a sequence, not a single packet, and capture can only see the
-		// end of it: BlockBreakEvent fires when the block is already gone, so
-		// every captured dig carries action=finish and nothing else.
+		// A dig is a sequence, not a single packet: START, then however many ticks
+		// of destroy progress the block's hardness demands, then FINISH. Capture
+		// takes all of it from the wire now, so the trace carries the player's
+		// real start, their real pauses, and the digs they began and abandoned.
 		//
-		// Replaying that finish on its own breaks nothing. The vanilla server
-		// accepts STOP_DESTROY_BLOCK only for the position it previously saw a
-		// START_DESTROY_BLOCK for; for any other position it treats the packet as
-		// client desync, re-sends the block state and drops the action. The
-		// result is a player who swings at a block forever while it stays put.
-		//
-		// So synthesise the start the capture could not observe. The server then
-		// runs its real destroy-progress state machine — instant break, or a
-		// delayed destroy that completes over the block's actual hardness — which
-		// is precisely the work a benchmark exists to reproduce.
-		if d.Action == mcproto.DigFinish {
-			_ = s.send(mcproto.SBPlayBlockDig,
-				mcproto.BlockDig(mcproto.DigStart, d.X, d.Y, d.Z, d.Face, s.nextSeq()))
-			_ = s.send(mcproto.SBPlayArmAnimation, mcproto.ArmAnimation(0))
+		// Traces recorded before that still exist, and they hold a lone FINISH —
+		// BlockBreakEvent fires once the block is already gone, so it was all
+		// there was to record. Replaying a bare FINISH breaks nothing: the vanilla
+		// server accepts STOP_DESTROY_BLOCK only for the position it previously
+		// saw a START_DESTROY_BLOCK for, and treats any other as client desync,
+		// re-sending the block state and dropping the action. So an unpaired
+		// FINISH still gets a synthetic START — but one that is now only emitted
+		// when the trace did not supply a real one, rather than always.
+		key := [3]int32{d.X, d.Y, d.Z}
+		if s.digStarted == nil {
+			s.digStarted = make(map[[3]int32]bool)
+		}
+		switch d.Action {
+		case mcproto.DigStart:
+			s.digStarted[key] = true
+		case mcproto.DigFinish:
+			if !s.digStarted[key] {
+				_ = s.send(mcproto.SBPlayBlockDig,
+					mcproto.BlockDig(mcproto.DigStart, d.X, d.Y, d.Z, d.Face, s.nextSeq()))
+				_ = s.send(mcproto.SBPlayArmAnimation, mcproto.ArmAnimation(0))
+				s.agg.DigStartsSynthesised.Add(1)
+			}
+			delete(s.digStarted, key)
+		case mcproto.DigAbort:
+			delete(s.digStarted, key)
 		}
 		_ = s.send(mcproto.SBPlayBlockDig,
 			mcproto.BlockDig(d.Action, d.X, d.Y, d.Z, d.Face, s.nextSeq()))
@@ -144,8 +156,14 @@ func (s *Session) dispatch(e tracefile.TraceEvent) {
 			handled = false
 			break
 		}
+		// p.X/Y/Z is the block clicked against and p.Face which side of it, which
+		// is what use_item_on carries; the server derives the placed position
+		// from the two. See CaptureListener.onPlace.
 		_ = s.send(mcproto.SBPlayBlockPlace,
 			mcproto.BlockPlace(p.Hand, p.X, p.Y, p.Z, p.Face, s.nextSeq()))
+		// A real client swings when it places.
+		_ = s.send(mcproto.SBPlayArmAnimation, mcproto.ArmAnimation(0))
+		s.notePlace(p.X, p.Y, p.Z, p.Face)
 
 	case rawevent.KindUseItem:
 		u, err := rawevent.DecodeUseItem(e.Data)
@@ -158,9 +176,86 @@ func (s *Session) dispatch(e tracefile.TraceEvent) {
 			mcproto.UseItem(u.Hand, s.nextSeq(), yaw, pitch))
 
 	case rawevent.KindAttackEntity, rawevent.KindInteractEntity:
-		// We cannot resolve captured entity hints to live entity IDs, so we
-		// reproduce the observable client behavior: a swing animation.
-		_ = s.send(mcproto.SBPlayArmAnimation, mcproto.ArmAnimation(0))
+		// Aim at something that actually exists.
+		//
+		// Entity ids are assigned per server run, so the captured one is
+		// meaningless here — which is why this used to send a bare arm swing and
+		// stop. A swing is an animation: no damage, no aggro, no death, no drops,
+		// no XP, none of the work that makes combat expensive. The client is told
+		// what is nearby though (add_entity), so replay picks a live entity of the
+		// captured kind within reach and hits that instead.
+		hint, err := rawevent.DecodeEntityRef(e.Data)
+		if err != nil {
+			handled = false
+			break
+		}
+		s.viewMu.Lock()
+		x, y, z := s.view.X, s.view.Y, s.view.Z
+		s.viewMu.Unlock()
+		wantType, known := mcproto.EntityTypeID[hint.TypeKey]
+		if !known {
+			wantType = -1
+		}
+		id, exact, found := s.entities.nearest(x, y+1.62, z, wantType) // eye height
+		if !found {
+			// Nothing in range. The swing still goes out, because the real client
+			// swings whether or not it connects, but the run must not count this
+			// as combat reproduced.
+			_ = s.send(mcproto.SBPlayArmAnimation, mcproto.ArmAnimation(0))
+			s.agg.AttacksNoTarget.Add(1)
+			break
+		}
+		if e.Kind == rawevent.KindAttackEntity {
+			_ = s.send(mcproto.SBPlayAttack, mcproto.Attack(id))
+			_ = s.send(mcproto.SBPlayArmAnimation, mcproto.ArmAnimation(0))
+		} else {
+			_ = s.send(mcproto.SBPlayInteract, mcproto.InteractAt(id, hint.Hand, false))
+		}
+		if exact {
+			s.agg.AttacksOnType.Add(1)
+		} else {
+			s.agg.AttacksOffType.Add(1)
+		}
+
+	case rawevent.KindHeldSlot:
+		slot, err := rawevent.DecodeHeldSlot(e.Data)
+		if err != nil || slot < 0 || slot > 8 {
+			handled = false
+			break
+		}
+		// Which tool is in hand decides how long a block takes to break —
+		// barehanded stone is 7.5 seconds against a diamond pickaxe's 0.4 — so a
+		// bot that never switches reproduces neither the timing of a mining trace
+		// nor, on harder blocks, the break at all.
+		_ = s.send(mcproto.SBPlaySetCarriedItem, mcproto.SetCarriedItem(slot))
+
+	case rawevent.KindChat:
+		msg, err := rawevent.DecodeChat(e.Data)
+		if err != nil || msg == "" {
+			handled = false
+			break
+		}
+		// Chat is one of the few player actions whose server cost scales with the
+		// population rather than the sender: one message is formatted and fanned
+		// out to everyone who can see it.
+		_ = s.send(mcproto.SBPlayChat,
+			mcproto.Chat(expandCommand(msg, s.Username), s.chatClock(), 0))
+
+	case rawevent.KindDropItem:
+		full, err := rawevent.DecodeDropItem(e.Data)
+		if err != nil {
+			handled = false
+			break
+		}
+		// A dropped item becomes an entity that ticks, gets picked up or despawns.
+		status := mcproto.DropItem
+		if full {
+			status = mcproto.DropItemStack
+		}
+		_ = s.send(mcproto.SBPlayBlockDig, mcproto.BlockDig(status, 0, 0, 0, 0, 0))
+
+	case rawevent.KindSwapHands:
+		_ = s.send(mcproto.SBPlayBlockDig, mcproto.BlockDig(mcproto.SwapHands, 0, 0, 0, 0, 0))
 
 	case rawevent.KindCmd:
 		raw, err := rawevent.DecodeCmd(e.Data)

@@ -27,12 +27,18 @@ func (w *Writer) Bytes() []byte { return w.buf }
 
 // Reset discards contents but keeps the buffer, so a caller encoding many
 // values in a loop allocates once rather than once per value.
-func (w *Writer) Reset() { w.buf = w.buf[:0] }
-func (w *Writer) Len() int      { return len(w.buf) }
+func (w *Writer) Reset()   { w.buf = w.buf[:0] }
+func (w *Writer) Len() int { return len(w.buf) }
 
-func (w *Writer) Raw(b []byte)  { w.buf = append(w.buf, b...) }
-func (w *Writer) Byte(b byte)   { w.buf = append(w.buf, b) }
-func (w *Writer) Bool(v bool)   { if v { w.Byte(1) } else { w.Byte(0) } }
+func (w *Writer) Raw(b []byte) { w.buf = append(w.buf, b...) }
+func (w *Writer) Byte(b byte)  { w.buf = append(w.buf, b) }
+func (w *Writer) Bool(v bool) {
+	if v {
+		w.Byte(1)
+	} else {
+		w.Byte(0)
+	}
+}
 
 // VarInt writes a Minecraft VarInt (unsigned LEB128 of the two's-complement
 // 32-bit value; negative numbers always take 5 bytes).
@@ -100,8 +106,8 @@ type Reader struct {
 
 func NewReader(data []byte) *Reader { return &Reader{data: data} }
 
-func (r *Reader) Remaining() int  { return len(r.data) - r.off }
-func (r *Reader) Rest() []byte    { return r.data[r.off:] }
+func (r *Reader) Remaining() int { return len(r.data) - r.off }
+func (r *Reader) Rest() []byte   { return r.data[r.off:] }
 
 func (r *Reader) need(n int) error {
 	// Reject negative lengths here rather than at each call site. Every

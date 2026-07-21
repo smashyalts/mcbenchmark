@@ -352,6 +352,44 @@ public final class CaptureManager {
     }
 
     /**
+     * Enqueues an event captured from a packet, on the connection's Netty thread.
+     *
+     * Same as {@link #record} but into the packet ring, because a ring has one
+     * producer and this thread is not the main one. Everything a client tells the
+     * server about itself directly — digging, dropping, swapping hands, switching
+     * hotbar slot, chat — belongs here rather than behind a Bukkit event: it is
+     * the actual packet, at its actual arrival time, including the ones the
+     * server goes on to reject.
+     *
+     * Unlike movement this builds a payload first, which allocates. That is fine
+     * at these rates (a few per player per minute, against movement's twenty per
+     * second) and it is off the main thread entirely, so it cannot stall a tick.
+     */
+    public void recordFromPacket(UUID uuid, int kind, byte[] payload, int dimensionId,
+                                 int blockX, int blockZ) {
+        PlayerSession s = sessions.get(uuid);
+        if (s == null) {
+            return;
+        }
+        EventRing ring = s.packetRing();
+        if (!ring.claimProducer(Thread.currentThread())) {
+            offThreadDropped.increment();
+            return;
+        }
+        long seq = ring.claim();
+        if (seq < 0) {
+            return;
+        }
+        int len = ring.payload(seq, payload);
+        ring.header(seq, nowMicros(), dimensionId,
+                Math.floorDiv(blockX >> 4, COARSE_CHUNK_DIV),
+                Math.floorDiv(blockZ >> 4, COARSE_CHUNK_DIV),
+                kind, len);
+        ring.publish(seq);
+        recordedTotal.increment();
+    }
+
+    /**
      * Enqueues an event with a caller-built payload. loc supplies the world
      * anchor. No-op if the player has no active session.
      */
@@ -371,6 +409,55 @@ public final class CaptureManager {
         }
         int len = ring.payload(seq, payload);
         writeHeader(ring, seq, loc, kind, len);
+        ring.publish(seq);
+        recordedTotal.increment();
+    }
+
+    /**
+     * Allocation-free capture of a mob spawn or death, on the main thread.
+     *
+     * These are the only remaining main-thread kinds whose rate is not bounded by
+     * player behaviour. A spawner farm, a raid or a mob grinder produces hundreds
+     * of {@code CreatureSpawnEvent}s a second regardless of how many players are
+     * online, and the generic {@link #record} path builds the payload before the
+     * ring is asked whether it has room — so on a busy server the main thread was
+     * allocating a ByteWriter, its backing array, a byte[] for the reason string
+     * and a trimmed copy, per event, for events that were then dropped. Garbage
+     * on the main thread is worse than it looks: a young GC is stop-the-world, so
+     * it pauses the tick this plugin exists not to disturb.
+     *
+     * Here the slot is claimed first, so a full ring costs a comparison and
+     * nothing else, and the payload is written straight into it.
+     *
+     * @param tag spawn reason for a spawn event, or null for a death (which
+     *            encodes a numeric reason instead, matching Payloads.mobDespawn)
+     */
+    public void recordMobEvent(UUID uuid, int kind, int entityType, String tag, Location loc) {
+        PlayerSession s = sessions.get(uuid);
+        if (s == null) {
+            return;
+        }
+        EventRing ring = s.mainRing();
+        if (!ring.claimProducer(Thread.currentThread())) {
+            offThreadDropped.increment();
+            return;
+        }
+        long seq = ring.claim();
+        if (seq < 0) {
+            return; // ring full; already counted as dropped, and nothing allocated
+        }
+        byte[] buf = ring.buffer();
+        int start = ring.payloadOffset(seq);
+        int off = EventRing.putVarInt(buf, start, entityType);
+        if (tag == null) {
+            off = EventRing.putVarInt(buf, off, 0); // despawn reason
+        } else {
+            // Bounded so the payload cannot run past its slot into the next one.
+            // Spawn reasons are short enum names; the cap never bites in practice.
+            off = EventRing.putAscii(buf, off, tag,
+                    EventRing.INLINE_PAYLOAD - (off - start) - 5);
+        }
+        writeHeader(ring, seq, loc, kind, off - start);
         ring.publish(seq);
         recordedTotal.increment();
     }
