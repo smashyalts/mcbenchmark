@@ -275,17 +275,6 @@ func unIndex(i int, sectionMinY, baseX, baseZ int32) (x, y, z int32) {
 	return baseX + int32(i&15), sectionMinY + int32(i>>8), baseZ + int32((i>>4)&15)
 }
 
-// ParseForgetChunk decodes forget_level_chunk, which carries a packed chunk
-// position: z in the high half, x in the low half.
-func ParseForgetChunk(body []byte) (x, z int32, err error) {
-	r := mcwire.NewReader(body)
-	v, err := r.Int64BE()
-	if err != nil {
-		return 0, 0, err
-	}
-	return int32(v), int32(v >> 32), nil
-}
-
 // ParseSectionBlocksUpdate decodes section_blocks_update: a section position
 // then a packed (state, local position) per changed block.
 func ParseSectionBlocksUpdate(body []byte) (map[[3]int32]int32, error) {

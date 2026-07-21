@@ -8,6 +8,19 @@ Targets **Minecraft 26.1.2 (protocol 775)**; validated end-to-end against a real
 Paper 26.1.2 server (see [Validation](#validation)). Retarget another version by
 regenerating packet IDs (see [docs/PROTOCOL.md](docs/PROTOCOL.md)).
 
+> **1.1.0-beta.** Every replayed action in this release has been confirmed
+> against a live Paper 26.1.2 server — blocks broken and placed, mobs damaged,
+> chat broadcast, tools switched — but only at small scale, on one world type,
+> with hand-built traces. What has *not* been re-measured since these changes is
+> a full-size run: capture now reads more packet kinds on the Netty path, and
+> replay parses every chunk column it is sent. Treat the first large run as part
+> of the testing.
+>
+> **Traces recorded before this release should be re-recorded.** Block placement
+> stored the wrong coordinate, digs carried no start, and attacks stored an
+> entity id that meant nothing — none of which the compiler can recover from an
+> old capture. Old traces still load and replay; they will just under-report.
+
 ```
  ┌────────────────────────┐   raw-*.bin    ┌─────────────────┐   trace-*.bin   ┌──────────────┐
  │ Paper capture plugin   │ ─────────────▶ │ trace-compiler  │ ──────────────▶ │  mc-replay   │
@@ -67,14 +80,14 @@ the jar:
 
 ```bash
 cd capture-plugin
-./build.sh          # produces BenchCapture-1.0.0.jar
+./build.sh          # produces BenchCapture-1.1.0-beta.jar
 ```
 
 ## Workflow
 
 ### 1. Capture (production, online-mode server)
 
-Drop `BenchCapture-1.0.0.jar` into the Paper server's `plugins/`. It writes
+Drop `BenchCapture-1.1.0-beta.jar` into the Paper server's `plugins/`. It writes
 `raw-*.bin` logs to the `output_path` in `config.yml`
 (default `/home/container/bench-capture/capture-logs`). Player UUIDs are hashed
 with a per-run salt before anything touches disk.
@@ -290,7 +303,7 @@ round-trips; a replay integration test that drives a full session over a real TC
 socket in both compressed and uncompressed framing; and `interop-check`, which
 proves the Java plugin's encoding classes + zlib produce capture logs the Go
 reader decodes field-for-field. The plugin compiles against `paper-api` and
-packages to `BenchCapture-1.0.0.jar`.
+packages to `BenchCapture-1.1.0-beta.jar`.
 
 Reproduce the live validation quickly:
 

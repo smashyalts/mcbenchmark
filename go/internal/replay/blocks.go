@@ -33,10 +33,6 @@ type blockLedger struct {
 
 	mu    sync.Mutex
 	state map[[3]int32]int32
-	// unparsed counts chunks whose format this client could not read. It is
-	// reported rather than ignored: an unreadable chunk means verification is
-	// unavailable, which must never be confused with verification passing.
-	unparsed int64
 	// minSectionY is the world's lowest section, needed to place a section's
 	// blocks at real Y coordinates. Zero value means "not yet known".
 	minSectionY int32
@@ -134,17 +130,11 @@ func (l *blockLedger) lookup(x, y, z int32) (int32, bool) {
 	return s, ok
 }
 
+// noteUnparsed records a chunk this client could not read. Reported rather than
+// ignored: an unreadable chunk means verification is unavailable, which must
+// never be confused with verification passing.
 func (l *blockLedger) noteUnparsed() {
-	l.mu.Lock()
-	l.unparsed++
-	l.mu.Unlock()
 	if l.agg != nil {
 		l.agg.ChunksUnparsed.Add(1)
 	}
-}
-
-func (l *blockLedger) unparsedChunks() int64 {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	return l.unparsed
 }

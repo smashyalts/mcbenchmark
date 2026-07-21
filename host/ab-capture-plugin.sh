@@ -39,9 +39,9 @@ trap cleanup EXIT
 run_one() {
   local arm="$1" idx="$2"
   if [ "$arm" = "with" ]; then
-    [ -f "$SRV/BenchCapture-DISABLED.jar" ] && mv "$SRV/BenchCapture-DISABLED.jar" "$SRV/plugins/BenchCapture-1.0.0.jar"
+    [ -f "$SRV/BenchCapture-DISABLED.jar" ] && mv "$SRV/BenchCapture-DISABLED.jar" "$SRV/plugins/BenchCapture-1.1.0-beta.jar"
   else
-    [ -f "$SRV/plugins/BenchCapture-1.0.0.jar" ] && mv "$SRV/plugins/BenchCapture-1.0.0.jar" "$SRV/BenchCapture-DISABLED.jar"
+    [ -f "$SRV/plugins/BenchCapture-1.1.0-beta.jar" ] && mv "$SRV/plugins/BenchCapture-1.1.0-beta.jar" "$SRV/BenchCapture-DISABLED.jar"
   fi
 
   local log="ab-$arm-$idx.log"

@@ -50,18 +50,6 @@ func (t *entityTracker) remove(ids []int32) {
 	t.mu.Unlock()
 }
 
-func (t *entityTracker) reset() {
-	t.mu.Lock()
-	clear(t.byID)
-	t.mu.Unlock()
-}
-
-func (t *entityTracker) count() int {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	return len(t.byID)
-}
-
 // attackRangeSq is the squared distance within which the server will accept an
 // attack. Vanilla allows a little over 3 blocks for melee and rejects beyond 6;
 // 36 is that hard ceiling, so anything this picks is at worst refused, never
