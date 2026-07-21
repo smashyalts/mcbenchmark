@@ -203,7 +203,22 @@ nothing looks identical to one that worked. The confirmed counters come from the
 ```
 active=1 connected=1 failed=0 events=124 digs=12/12 places=4/4   <- working
 active=1 connected=1 failed=0 events=124 digs=0/12  places=0/4   <- sent, world unchanged
+active=1 connected=1 failed=0 events=124 digs=0/0 into_air=12    <- trace and world disagree
 ```
+
+`into_air` means the bot was asked to break blocks that are not there. The
+client reads the chunks the server sends it and knows the state of every
+position its trace touches, so a dig at air is reported as what it is instead of
+being sent and counted. That check matters most when a bot is misplaced: most
+coordinates in a world are air, so without it a bot digging into empty space
+produced a pending dig that some *other* packet could then confirm — a failed
+placement at the same position sends `block_update(air)`, which is
+indistinguishable from "the block you broke is now air".
+
+Two more counters keep "could not check" separate from "checked and passed":
+`digs_unverifiable` (the chunk never arrived) and `chunks_unparsed` (the chunk
+format moved and `internal/mcproto/chunk.go` needs regenerating). Neither is
+ever folded into a success.
 
 A run also warns at login when the server put a bot somewhere other than where
 its trace was captured, which is the usual reason for `digs=0/N`:

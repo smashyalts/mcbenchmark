@@ -73,6 +73,14 @@ func (r *Runner) Run() error {
 				if sent := a.PlacesSent.Load(); sent > 0 {
 					blocks += fmt.Sprintf(" places=%d/%d", a.PlacesConfirmed.Load(), sent)
 				}
+				// Loud, because it means the trace and the world disagree: the
+				// bot is being asked to break blocks that are not there.
+				if air := a.DigsIntoAir.Load(); air > 0 {
+					blocks += fmt.Sprintf(" into_air=%d", air)
+				}
+				if u := a.ChunksUnparsed.Load(); u > 0 {
+					blocks += fmt.Sprintf(" UNREADABLE_CHUNKS=%d", u)
+				}
 				log.Printf("active=%d connected=%d failed=%d events=%d%s",
 					a.Active.Load(), a.Connected.Load(), a.Failed.Load(),
 					a.EventsReplayed.Load(), blocks)
@@ -203,6 +211,7 @@ func (r *Runner) buildSession(idx int, target string, deadline time.Time, perSes
 		LoopTrace:    sc.Traces.ReusePolicy != "once",
 		Origin:       tr.Origin,
 		entities:     newEntityTracker(),
+		blocks:       newBlockLedger(tr, &r.coll.Agg),
 		agg:          &r.coll.Agg,
 		coll:         r.coll,
 	}

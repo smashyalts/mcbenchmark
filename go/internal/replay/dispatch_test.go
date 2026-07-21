@@ -96,3 +96,57 @@ func TestNearestPrefersTheCapturedSpecies(t *testing.T) {
 		t.Error("an entity 40 blocks away must not be attacked")
 	}
 }
+
+// A dig into a block the client knows is air must not be sent at all, and must
+// never reach the pending set where something else could confirm it.
+func TestDigIntoKnownAirIsNotSent(t *testing.T) {
+	tr := &tracefile.Trace{Events: []tracefile.TraceEvent{
+		{Kind: rawevent.KindDig, Data: rawevent.DigPayload{
+			Action: mcproto.DigFinish, X: 4, Y: 5, Z: 6}.Encode()},
+	}}
+	agg := &Aggregate{}
+	s := &Session{agg: agg, blocks: newBlockLedger(tr, agg)}
+	if s.blocks == nil {
+		t.Fatal("a trace that digs must produce a ledger")
+	}
+	s.blocks.set(4, 5, 6, mcproto.CaveAirStateID)
+
+	s.dispatch(tr.Events[0])
+	if got := agg.DigsIntoAir.Load(); got != 1 {
+		t.Errorf("digs_into_air = %d, want 1", got)
+	}
+	if got := agg.DigsSent.Load(); got != 0 {
+		t.Errorf("digs_sent = %d, want 0 — an air dig is not a dig", got)
+	}
+	// Nothing pending means a stray air block_update here cannot confirm it.
+	s.confirmBlockUpdate(mcproto.BlockUpdate{X: 4, Y: 5, Z: 6, StateID: mcproto.AirStateID})
+	if got := agg.DigsConfirmed.Load(); got != 0 {
+		t.Errorf("digs_confirmed = %d, want 0", got)
+	}
+}
+
+// A solid block still digs, and an unknown one is counted as unverifiable
+// rather than being silently treated as either outcome.
+func TestDigIntoSolidAndUnknownBlocks(t *testing.T) {
+	tr := &tracefile.Trace{Events: []tracefile.TraceEvent{
+		{Kind: rawevent.KindDig, Data: rawevent.DigPayload{
+			Action: mcproto.DigFinish, X: 1, Y: 1, Z: 1}.Encode()},
+		{Kind: rawevent.KindDig, Data: rawevent.DigPayload{
+			Action: mcproto.DigFinish, X: 2, Y: 2, Z: 2}.Encode()},
+	}}
+	agg := &Aggregate{}
+	s := &Session{agg: agg, blocks: newBlockLedger(tr, agg)}
+	s.blocks.set(1, 1, 1, 1234) // solid; the second stays unknown
+
+	s.dispatch(tr.Events[0])
+	s.dispatch(tr.Events[1])
+	if got := agg.DigsSent.Load(); got != 2 {
+		t.Errorf("digs_sent = %d, want 2", got)
+	}
+	if got := agg.DigsIntoAir.Load(); got != 0 {
+		t.Errorf("digs_into_air = %d, want 0", got)
+	}
+	if got := agg.DigsUnverifiable.Load(); got != 1 {
+		t.Errorf("digs_unverifiable = %d, want 1 for the block never seen", got)
+	}
+}

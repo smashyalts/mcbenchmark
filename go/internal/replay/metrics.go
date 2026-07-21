@@ -53,6 +53,22 @@ type Aggregate struct {
 	AttacksOnType   atomic.Int64
 	AttacksOffType  atomic.Int64
 	AttacksNoTarget atomic.Int64
+	// DigsIntoAir counts digs aimed at a block the client knows is already air.
+	// They are not sent, because they are not digs — and before the block ledger
+	// existed they were counted as *successes*: the server answers a dig into
+	// air with the same block_update(air) it sends when it really broke
+	// something. A bot that spawned in the wrong place digs into air almost
+	// every time, so the one case the dig counter existed to catch was the one
+	// case it got backwards.
+	DigsIntoAir atomic.Int64
+	// DigsUnverifiable counts digs at positions whose state never arrived —
+	// the chunk was not sent, or could not be parsed. Kept apart from both
+	// success and failure, because "we could not check" is neither.
+	DigsUnverifiable atomic.Int64
+	// ChunksUnparsed counts chunk columns this client could not decode, which
+	// makes every block in them unverifiable. Non-zero means the chunk format
+	// has moved and mcproto/chunk.go needs regenerating against the new version.
+	ChunksUnparsed atomic.Int64
 }
 
 // Sample is one point of the concurrency time series.
@@ -101,6 +117,9 @@ type Report struct {
 	AttacksOnType           int64           `json:"attacks_on_type"`
 	AttacksOffType          int64           `json:"attacks_off_type"`
 	AttacksNoTarget         int64           `json:"attacks_no_target"`
+	DigsIntoAir             int64           `json:"digs_into_air"`
+	DigsUnverifiable        int64           `json:"digs_unverifiable"`
+	ChunksUnparsed          int64           `json:"chunks_unparsed"`
 	PacketsSent             int64           `json:"packets_sent"`
 	BytesIn                 int64           `json:"bytes_in"`
 	BytesOut                int64           `json:"bytes_out"`
@@ -169,6 +188,9 @@ func (c *Collector) WriteReport(dir, scenarioName, target string, protocol, targ
 		AttacksOnType:           c.Agg.AttacksOnType.Load(),
 		AttacksOffType:          c.Agg.AttacksOffType.Load(),
 		AttacksNoTarget:         c.Agg.AttacksNoTarget.Load(),
+		DigsIntoAir:             c.Agg.DigsIntoAir.Load(),
+		DigsUnverifiable:        c.Agg.DigsUnverifiable.Load(),
+		ChunksUnparsed:          c.Agg.ChunksUnparsed.Load(),
 		PacketsSent:             c.Agg.PacketsSent.Load(),
 		BytesIn:                 c.Agg.BytesIn.Load(),
 		BytesOut:                c.Agg.BytesOut.Load(),

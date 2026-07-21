@@ -123,6 +123,28 @@ click is what matters.
 Events with no serverbound analogue are counted in the run report
 (`events_skipped`) so coverage is never silently overstated.
 
+## Block state tracking
+
+The client parses `level_chunk_with_light` to learn the state of the blocks its
+trace touches, so a dig can be told apart from a dig into air. Only the
+positions the trace digs or builds at are kept — a column still has to be walked
+in full to reach them, since chunk sections are variable-length, but nothing
+else is stored, which is what keeps hundreds of bots affordable.
+
+Section layout, read off `LevelChunkSection.write` and
+`PalettedContainer.Data.write` rather than assumed. Two details are easy to miss
+and each corrupts every section after the first:
+
+- a section writes **two** shorts, non-empty block count *and* fluid count;
+- the packed long array has **no length prefix** — the count follows from
+  bits-per-entry.
+
+The parse is self-checking: the section buffer is length-prefixed, so leftover
+or missing bytes surface as an error and the chunk is counted in
+`chunks_unparsed`. An unreadable chunk makes its blocks *unverifiable*, which is
+reported separately from verified — the one thing this must never do is let a
+format change quietly turn into confident wrong answers.
+
 ## Position handling
 
 The client maintains a minimal `WorldView` (position, rotation, last teleport

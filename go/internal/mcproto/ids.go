@@ -106,8 +106,10 @@ const (
 
 // Clientbound packets the replay client reads to track the live world.
 const (
-	CBPlayAddEntity      int32 = 0x01 // add_entity
-	CBPlayRemoveEntities int32 = 0x4D // remove_entities
+	CBPlayAddEntity           int32 = 0x01 // add_entity
+	CBPlayRemoveEntities      int32 = 0x4D // remove_entities
+	CBPlayLevelChunk          int32 = 0x2D // level_chunk_with_light
+	CBPlaySectionBlocksUpdate int32 = 0x54 // section_blocks_update
 )
 
 // Block-dig statuses (serverbound player_action). The server runs a small state

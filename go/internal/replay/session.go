@@ -144,6 +144,10 @@ type Session struct {
 	// aimed at something real instead of being a bare animation.
 	entities *entityTracker
 
+	// What the client knows about the blocks its trace touches, so a dig can be
+	// told apart from a dig into air. Nil for traces that touch no blocks.
+	blocks *blockLedger
+
 	// digStarted tracks positions this session has already sent a START for, so
 	// a trace that carries its own real START is not given a synthetic one too.
 	// Touched only by the dispatch goroutine.
@@ -275,6 +279,20 @@ func (s *Session) send(id int32, body []byte) error {
 // a run that counts "events replayed" alone reports total success either way.
 // That has now been the wrong answer twice, so the client checks.
 func (s *Session) noteDig(x, y, z int32) {
+	// A dig aimed at air is not a dig. The server answers one with a
+	// block_update carrying air — the very same packet it sends when it really
+	// did break something — so without the block ledger the two are
+	// indistinguishable, and a bot that spawned in the wrong place would report
+	// every one of its digs as a success. Most of a world is air, so that is the
+	// normal outcome of the misplacement this counter exists to detect.
+	if s.blocks != nil {
+		if st, known := s.blocks.lookup(x, y, z); known && mcproto.IsAir(st) {
+			s.agg.DigsIntoAir.Add(1)
+			return
+		} else if !known {
+			s.agg.DigsUnverifiable.Add(1)
+		}
+	}
 	s.digMu.Lock()
 	if s.digPending == nil {
 		s.digPending = make(map[[3]int32]bool)
@@ -324,10 +342,15 @@ func faceOffset(face int32) (x, y, z int32) {
 // confirmBlockUpdate matches a clientbound block_update against the digs and
 // placements we sent: air where we dug, anything else where we built.
 func (s *Session) confirmBlockUpdate(b mcproto.BlockUpdate) {
+	// Keep the ledger current first: a looped trace digs the same position on
+	// every pass, and after the first pass it really is air.
+	if s.blocks != nil {
+		s.blocks.set(b.X, b.Y, b.Z, b.StateID)
+	}
 	key := [3]int32{b.X, b.Y, b.Z}
 	s.digMu.Lock()
 	var dug, built bool
-	if b.StateID == mcproto.AirStateID {
+	if mcproto.IsAir(b.StateID) {
 		if dug = s.digPending[key]; dug {
 			delete(s.digPending, key)
 		}

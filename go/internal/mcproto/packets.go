@@ -352,11 +352,6 @@ type BlockUpdate struct {
 	StateID int32
 }
 
-// AirStateID is the global block-state id of minecraft:air, which is always 0.
-// A block_update carrying it at a position we dug is the server confirming the
-// block is gone.
-const AirStateID int32 = 0
-
 // ParseBlockUpdate decodes a clientbound block_update body.
 func ParseBlockUpdate(body []byte) (BlockUpdate, error) {
 	var b BlockUpdate
