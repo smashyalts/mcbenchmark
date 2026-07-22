@@ -102,6 +102,15 @@ public final class RawEvent {
      */
     public static final int KIND_USE_ITEM_RELEASE = 23;
 
+    /**
+     * An entity action from the wire: sneak, sprint, leave bed, the two horse-jump
+     * actions, open horse inventory, and the elytra launch. Replaces the Bukkit
+     * sprint/sneak toggle events, which fired on the main thread after validation
+     * and could see only those two — the elytra launch (which starts gliding
+     * physics) and the horse actions never reached a trace.
+     */
+    public static final int KIND_ENTITY_ACTION = 24;
+
     public long tMicro;
     /** Wall-clock epoch millis, used for frame headers only; NOT encoded. */
     public long epochMs;

@@ -77,6 +77,8 @@ public final class InteropFixture {
             more.add(ev(17_000, pid, RawEvent.KIND_SWING, Payloads.swing(1)));
             // Releasing a held use (bow shot / finish eating): no payload.
             more.add(ev(18_000, pid, RawEvent.KIND_USE_ITEM_RELEASE, new byte[0]));
+            // An entity action: horse jump (5) with a non-zero jump boost.
+            more.add(ev(19_000, pid, RawEvent.KIND_ENTITY_ACTION, Payloads.entityAction(5, 100)));
             w.writeFrame(more, 300L, 400L);
         }
         System.out.println("wrote " + outFile);

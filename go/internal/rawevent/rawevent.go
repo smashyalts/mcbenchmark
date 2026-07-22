@@ -66,6 +66,13 @@ const (
 	// is a separate digging action and is where the projectile spawns and the
 	// real cost begins, so a trace with the draw but not the shot fired nothing.
 	KindUseItemRelease int32 = 23
+	// KindEntityAction is a wire entity_action: sneak, sprint, leave bed, the two
+	// horse-jump actions, open horse inventory, and the elytra launch. It
+	// supersedes KindSprintToggle and KindSneakToggle, which came from Bukkit
+	// events that saw only sprint and sneak; the elytra launch starts gliding
+	// physics on the server and was never captured. Old traces still carry the
+	// two toggle kinds, so replay keeps handling them.
+	KindEntityAction int32 = 24
 )
 
 var kindNames = map[int32]string{
@@ -78,6 +85,7 @@ var kindNames = map[int32]string{
 	KindInventorySnapshot: "inventory_snapshot", KindHeldSlot: "held_slot",
 	KindChat: "chat", KindDropItem: "drop_item", KindSwapHands: "swap_hands",
 	KindSwing: "swing", KindUseItemRelease: "use_item_release",
+	KindEntityAction: "entity_action",
 }
 
 func KindName(k int32) string {
@@ -652,6 +660,28 @@ func EncodeSwing(hand int32) []byte {
 		return []byte{1}
 	}
 	return []byte{0}
+}
+
+// DecodeEntityAction decodes KindEntityAction: the protocol action id and the
+// jump boost (zero except for a horse jump).
+func DecodeEntityAction(p []byte) (action, jumpBoost int32, err error) {
+	r := mcwire.NewReader(p)
+	action, err = r.VarInt()
+	if err != nil {
+		return 0, 0, err
+	}
+	jumpBoost, err = r.VarInt()
+	if err != nil {
+		return 0, 0, err
+	}
+	return action, jumpBoost, nil
+}
+
+func EncodeEntityAction(action, jumpBoost int32) []byte {
+	w := mcwire.NewWriter()
+	w.VarInt(action)
+	w.VarInt(jumpBoost)
+	return w.Bytes()
 }
 
 // EntityRef identifies what a player attacked or interacted with.

@@ -31,8 +31,6 @@ import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.event.player.PlayerRespawnEvent;
 import org.bukkit.event.player.PlayerTeleportEvent;
-import org.bukkit.event.player.PlayerToggleSneakEvent;
-import org.bukkit.event.player.PlayerToggleSprintEvent;
 
 /**
  * CaptureListener translates Bukkit events into RawEvents via CaptureManager.
@@ -213,17 +211,10 @@ public final class CaptureListener implements Listener {
         reanchor(e.getPlayer(), e.getRespawnLocation());
     }
 
-    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
-    public void onSprint(PlayerToggleSprintEvent e) {
-        mgr.record(e.getPlayer().getUniqueId(), RawEvent.KIND_SPRINT_TOGGLE,
-                Payloads.toggle(e.isSprinting()), e.getPlayer().getLocation());
-    }
-
-    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
-    public void onSneak(PlayerToggleSneakEvent e) {
-        mgr.record(e.getPlayer().getUniqueId(), RawEvent.KIND_SNEAK_TOGGLE,
-                Payloads.toggle(e.isSneaking()), e.getPlayer().getLocation());
-    }
+    // Sprint and sneak used to be captured here from Bukkit's toggle events.
+    // They now come off the wire in PacketCaptureListener as entity_action,
+    // together with the actions Bukkit cannot see — the elytra launch and the
+    // horse actions — so these handlers are gone to avoid double-recording.
 
     // Digging is NOT captured here any more. BlockBreakEvent fires once the block
     // is already gone, so it could only ever produce a lone "finish" with no

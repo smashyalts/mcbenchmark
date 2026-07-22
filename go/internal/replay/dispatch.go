@@ -263,6 +263,17 @@ func (s *Session) dispatch(e tracefile.TraceEvent) {
 		// and for a bow it is the packet that actually spawns the arrow.
 		_ = s.send(mcproto.SBPlayBlockDig, mcproto.BlockDig(mcproto.ReleaseUseItem, 0, 0, 0, 0, 0))
 
+	case rawevent.KindEntityAction:
+		// Sneak, sprint, leave bed, horse jump, open horse inventory, elytra
+		// launch — captured from the wire with their real protocol id, so replay
+		// forwards the id verbatim rather than reconstructing it from a toggle.
+		action, boost, err := rawevent.DecodeEntityAction(e.Data)
+		if err != nil {
+			handled = false
+			break
+		}
+		_ = s.send(mcproto.SBPlayEntityAction, mcproto.EntityActionBoost(action, boost))
+
 	case rawevent.KindSwing:
 		// The most frequent thing a player sends, and the whole reason to capture
 		// it separately: most swings ride along with no other event. Forward the

@@ -14,6 +14,7 @@ import com.github.retrooper.packetevents.protocol.world.Location;
 import com.github.retrooper.packetevents.util.Vector3i;
 import com.github.retrooper.packetevents.wrapper.play.client.WrapperPlayClientAnimation;
 import com.github.retrooper.packetevents.wrapper.play.client.WrapperPlayClientChatMessage;
+import com.github.retrooper.packetevents.wrapper.play.client.WrapperPlayClientEntityAction;
 import com.github.retrooper.packetevents.wrapper.play.client.WrapperPlayClientHeldItemChange;
 import com.github.retrooper.packetevents.wrapper.play.client.WrapperPlayClientPlayerDigging;
 import com.github.retrooper.packetevents.wrapper.play.client.WrapperPlayClientPlayerFlying;
@@ -142,6 +143,21 @@ public final class PacketCaptureListener extends PacketListenerAbstract {
             }
             return;
         }
+        if (type == PacketType.Play.Client.ENTITY_ACTION) {
+            // Sneak, sprint, leave bed, horse jump, open horse inventory, start
+            // gliding. Taken here rather than from Bukkit's toggle events, which
+            // fire on the main thread after validation and can only see sneak and
+            // sprint — the elytra launch, which starts gliding physics, and the
+            // horse actions are invisible to them.
+            WrapperPlayClientEntityAction w = new WrapperPlayClientEntityAction(event);
+            int action = entityActionId(w.getAction());
+            if (action >= 0) {
+                record(uuid, session, RawEvent.KIND_ENTITY_ACTION,
+                        Payloads.entityAction(action, w.getJumpBoost()),
+                        blockX(session), blockZ(session));
+            }
+            return;
+        }
         if (type == PacketType.Play.Client.ANIMATION) {
             // One swing per left-click: dig start, attack, or a miss. getHand()
             // is 0 (main) or 1 (off); getId() maps straight to the protocol value.
@@ -172,6 +188,28 @@ public final class PacketCaptureListener extends PacketListenerAbstract {
                 record(uuid, session, RawEvent.KIND_CHAT, Payloads.chat(msg),
                         blockX(session), blockZ(session));
             }
+        }
+    }
+
+    /**
+     * Maps the decoded entity action to its stable protocol id (0-8), the value
+     * the modern wire uses and the one replay writes back. Switching on the enum
+     * constant, rather than trusting its ordinal or PacketEvents' version-keyed
+     * getId, keeps capture correct regardless of which version decoded it.
+     * Anything we do not model returns -1 and is skipped.
+     */
+    private static int entityActionId(WrapperPlayClientEntityAction.Action a) {
+        switch (a) {
+            case START_SNEAKING: return 0;
+            case STOP_SNEAKING: return 1;
+            case LEAVE_BED: return 2;
+            case START_SPRINTING: return 3;
+            case STOP_SPRINTING: return 4;
+            case START_JUMPING_WITH_HORSE: return 5;
+            case STOP_JUMPING_WITH_HORSE: return 6;
+            case OPEN_HORSE_INVENTORY: return 7;
+            case START_FLYING_WITH_ELYTRA: return 8;
+            default: return -1;
         }
     }
 
@@ -252,6 +290,7 @@ public final class PacketCaptureListener extends PacketListenerAbstract {
                 || type == PacketType.Play.Client.PLAYER_ROTATION
                 || type == PacketType.Play.Client.PLAYER_FLYING
                 || type == PacketType.Play.Client.PLAYER_DIGGING
+                || type == PacketType.Play.Client.ENTITY_ACTION
                 || type == PacketType.Play.Client.ANIMATION
                 || type == PacketType.Play.Client.HELD_ITEM_CHANGE
                 || type == PacketType.Play.Client.CHAT_MESSAGE;

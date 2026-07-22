@@ -181,6 +181,18 @@ public final class Payloads {
     }
 
     /**
+     * An entity action (sneak/sprint/leave-bed/horse/elytra): the protocol action
+     * id, then the jump boost, which is only meaningful for a horse jump and zero
+     * otherwise.
+     */
+    public static byte[] entityAction(int action, int jumpBoost) {
+        ByteWriter w = new ByteWriter();
+        w.varInt(action);
+        w.varInt(jumpBoost);
+        return w.toByteArray();
+    }
+
+    /**
      * An absolute position the server moved the player to.
      *
      * Same encoding as the session_start marker's position, minus the string:
