@@ -175,6 +175,11 @@ public final class Payloads {
         return new byte[] { (byte) (fullStack ? 1 : 0) };
     }
 
+    /** An arm swing, carrying which hand swung (0 main, 1 off). */
+    public static byte[] swing(int hand) {
+        return new byte[] { (byte) hand };
+    }
+
     /**
      * An absolute position the server moved the player to.
      *

@@ -73,6 +73,8 @@ public final class InteropFixture {
             more.add(ev(15_000, pid, RawEvent.KIND_SWAP_HANDS, new byte[0]));
             // A dig start, which capture could not observe until it read packets.
             more.add(ev(16_000, pid, RawEvent.KIND_DIG, Payloads.dig(0, 10, 64, -5, 1)));
+            // An off-hand arm swing.
+            more.add(ev(17_000, pid, RawEvent.KIND_SWING, Payloads.swing(1)));
             w.writeFrame(more, 300L, 400L);
         }
         System.out.println("wrote " + outFile);

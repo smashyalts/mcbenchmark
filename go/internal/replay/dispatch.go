@@ -257,6 +257,18 @@ func (s *Session) dispatch(e tracefile.TraceEvent) {
 	case rawevent.KindSwapHands:
 		_ = s.send(mcproto.SBPlayBlockDig, mcproto.BlockDig(mcproto.SwapHands, 0, 0, 0, 0, 0))
 
+	case rawevent.KindSwing:
+		// The most frequent thing a player sends, and the whole reason to capture
+		// it separately: most swings ride along with no other event. Forward the
+		// hand the client actually swung. The server re-broadcasts each swing to
+		// everyone nearby, so this is animation-fanout load, not a no-op.
+		hand, err := rawevent.DecodeSwing(e.Data)
+		if err != nil {
+			handled = false
+			break
+		}
+		_ = s.send(mcproto.SBPlayArmAnimation, mcproto.ArmAnimation(hand))
+
 	case rawevent.KindCmd:
 		raw, err := rawevent.DecodeCmd(e.Data)
 		if err != nil {

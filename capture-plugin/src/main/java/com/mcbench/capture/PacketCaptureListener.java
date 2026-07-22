@@ -12,6 +12,7 @@ import com.github.retrooper.packetevents.protocol.packettype.PacketType;
 import com.github.retrooper.packetevents.protocol.packettype.PacketTypeCommon;
 import com.github.retrooper.packetevents.protocol.world.Location;
 import com.github.retrooper.packetevents.util.Vector3i;
+import com.github.retrooper.packetevents.wrapper.play.client.WrapperPlayClientAnimation;
 import com.github.retrooper.packetevents.wrapper.play.client.WrapperPlayClientChatMessage;
 import com.github.retrooper.packetevents.wrapper.play.client.WrapperPlayClientHeldItemChange;
 import com.github.retrooper.packetevents.wrapper.play.client.WrapperPlayClientPlayerDigging;
@@ -137,6 +138,14 @@ public final class PacketCaptureListener extends PacketListenerAbstract {
             }
             return;
         }
+        if (type == PacketType.Play.Client.ANIMATION) {
+            // One swing per left-click: dig start, attack, or a miss. getHand()
+            // is 0 (main) or 1 (off); getId() maps straight to the protocol value.
+            int hand = new WrapperPlayClientAnimation(event).getHand().getId();
+            record(uuid, session, RawEvent.KIND_SWING, Payloads.swing(hand),
+                    blockX(session), blockZ(session));
+            return;
+        }
         if (type == PacketType.Play.Client.HELD_ITEM_CHANGE) {
             int slot = new WrapperPlayClientHeldItemChange(event).getSlot();
             if (slot >= 0 && slot <= 8) {
@@ -239,6 +248,7 @@ public final class PacketCaptureListener extends PacketListenerAbstract {
                 || type == PacketType.Play.Client.PLAYER_ROTATION
                 || type == PacketType.Play.Client.PLAYER_FLYING
                 || type == PacketType.Play.Client.PLAYER_DIGGING
+                || type == PacketType.Play.Client.ANIMATION
                 || type == PacketType.Play.Client.HELD_ITEM_CHANGE
                 || type == PacketType.Play.Client.CHAT_MESSAGE;
     }

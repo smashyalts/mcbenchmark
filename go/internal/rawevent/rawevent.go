@@ -53,6 +53,13 @@ const (
 	KindDropItem int32 = 20
 	// KindSwapHands is the offhand swap (F).
 	KindSwapHands int32 = 21
+	// KindSwing is an arm swing, sent on every left-click — a dig start, an
+	// attack, or a miss. It is the most frequent action a player performs, and
+	// the server broadcasts each swing to every nearby player, so it is load
+	// that scales with how many others are in view. Most swings accompany no
+	// other event we record, so without it a mining or air-swinging trace
+	// under-reproduces the real packet rate.
+	KindSwing int32 = 22
 )
 
 var kindNames = map[int32]string{
@@ -64,6 +71,7 @@ var kindNames = map[int32]string{
 	KindMarker: "marker", KindCreativeSet: "creative_set", KindReanchor: "reanchor",
 	KindInventorySnapshot: "inventory_snapshot", KindHeldSlot: "held_slot",
 	KindChat: "chat", KindDropItem: "drop_item", KindSwapHands: "swap_hands",
+	KindSwing: "swing",
 }
 
 func KindName(k int32) string {
@@ -618,6 +626,23 @@ func DecodeDropItem(p []byte) (bool, error) {
 
 func EncodeDropItem(fullStack bool) []byte {
 	if fullStack {
+		return []byte{1}
+	}
+	return []byte{0}
+}
+
+// DecodeSwing decodes KindSwing: which hand swung, 0 (main) or 1 (off). The
+// payload is a single byte; anything but 1 is read as the main hand, so a
+// short or corrupt payload degrades to the common case rather than erroring.
+func DecodeSwing(p []byte) (int32, error) {
+	if len(p) == 0 || p[0] != 1 {
+		return 0, nil
+	}
+	return 1, nil
+}
+
+func EncodeSwing(hand int32) []byte {
+	if hand == 1 {
 		return []byte{1}
 	}
 	return []byte{0}

@@ -80,6 +80,17 @@ public final class RawEvent {
     /** The offhand swap (F). */
     public static final int KIND_SWAP_HANDS = 21;
 
+    /**
+     * An arm swing. The client sends one on every left-click — the start of a
+     * dig, every attack, and every swing that hits nothing at all. It is the
+     * single most frequent action a player performs, and the server broadcasts
+     * each one as an animation to every nearby player, so its cost scales with
+     * how many others are in view. Captured on its own because most swings
+     * accompany no other event we record: mining a long vein, or a player
+     * nervously swinging at air, is pure swing traffic that was invisible before.
+     */
+    public static final int KIND_SWING = 22;
+
     public long tMicro;
     /** Wall-clock epoch millis, used for frame headers only; NOT encoded. */
     public long epochMs;
