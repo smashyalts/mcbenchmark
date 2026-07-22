@@ -257,6 +257,12 @@ func (s *Session) dispatch(e tracefile.TraceEvent) {
 	case rawevent.KindSwapHands:
 		_ = s.send(mcproto.SBPlayBlockDig, mcproto.BlockDig(mcproto.SwapHands, 0, 0, 0, 0, 0))
 
+	case rawevent.KindUseItemRelease:
+		// Finishing a held use — the bow/crossbow shot, the last bite, lowering a
+		// shield. The draw went out earlier as a use_item; this is the release,
+		// and for a bow it is the packet that actually spawns the arrow.
+		_ = s.send(mcproto.SBPlayBlockDig, mcproto.BlockDig(mcproto.ReleaseUseItem, 0, 0, 0, 0, 0))
+
 	case rawevent.KindSwing:
 		// The most frequent thing a player sends, and the whole reason to capture
 		// it separately: most swings ride along with no other event. Forward the

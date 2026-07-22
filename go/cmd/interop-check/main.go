@@ -22,8 +22,8 @@ func main() {
 	if err != nil {
 		fail("read: %v", err)
 	}
-	if len(events) != 18 {
-		fail("expected 18 events, got %d", len(events))
+	if len(events) != 19 {
+		fail("expected 19 events, got %d", len(events))
 	}
 
 	pid := sha256.Sum256([]byte("player-uuid-0|salt"))
@@ -108,6 +108,9 @@ func main() {
 	}
 	if hand, _ := rawevent.DecodeSwing(events[17].Payload); hand != 1 {
 		fail("swing hand mismatch: %d", hand)
+	}
+	if events[18].Kind != rawevent.KindUseItemRelease || len(events[18].Payload) != 0 {
+		fail("use-item release mismatch: %+v", events[18])
 	}
 
 	fmt.Printf("OK: decoded %d events across frames, all fields match\n", len(events))

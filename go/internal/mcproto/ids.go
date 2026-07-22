@@ -123,9 +123,10 @@ const (
 	DigStart      int32 = 0
 	DigAbort      int32 = 1
 	DigFinish     int32 = 2
-	DropItemStack int32 = 3 // drop the whole stack (ctrl-Q)
-	DropItem      int32 = 4 // drop one item (Q)
-	SwapHands     int32 = 6 // offhand swap (F)
+	DropItemStack  int32 = 3 // drop the whole stack (ctrl-Q)
+	DropItem       int32 = 4 // drop one item (Q)
+	ReleaseUseItem int32 = 5 // finish a held use: shoot the bow, finish eating, lower the shield
+	SwapHands      int32 = 6 // offhand swap (F)
 )
 
 // Entity action IDs (serverbound player_command).

@@ -129,11 +129,15 @@ public final class PacketCaptureListener extends PacketListenerAbstract {
                     record(uuid, session, RawEvent.KIND_DROP_ITEM,
                             Payloads.dropItem(action == 3), blockX(session), blockZ(session));
                     break;
+                case 5: // release a held use: bow/crossbow shot, finish eating, lower shield
+                    record(uuid, session, RawEvent.KIND_USE_ITEM_RELEASE, EMPTY,
+                            blockX(session), blockZ(session));
+                    break;
                 case 6: // swap with offhand
                     record(uuid, session, RawEvent.KIND_SWAP_HANDS, EMPTY,
                             blockX(session), blockZ(session));
                     break;
-                default: // release-use and stab carry no replay analogue yet
+                default: // any future digging action we do not yet model
                     break;
             }
             return;

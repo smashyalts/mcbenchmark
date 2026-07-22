@@ -60,6 +60,12 @@ const (
 	// other event we record, so without it a mining or air-swinging trace
 	// under-reproduces the real packet rate.
 	KindSwing int32 = 22
+	// KindUseItemRelease is the release of a held right-click use: the bow or
+	// crossbow shot, the end of eating or drinking, lowering a raised shield.
+	// The use starts as a use_item (KindUseItem, already captured); the release
+	// is a separate digging action and is where the projectile spawns and the
+	// real cost begins, so a trace with the draw but not the shot fired nothing.
+	KindUseItemRelease int32 = 23
 )
 
 var kindNames = map[int32]string{
@@ -71,7 +77,7 @@ var kindNames = map[int32]string{
 	KindMarker: "marker", KindCreativeSet: "creative_set", KindReanchor: "reanchor",
 	KindInventorySnapshot: "inventory_snapshot", KindHeldSlot: "held_slot",
 	KindChat: "chat", KindDropItem: "drop_item", KindSwapHands: "swap_hands",
-	KindSwing: "swing",
+	KindSwing: "swing", KindUseItemRelease: "use_item_release",
 }
 
 func KindName(k int32) string {

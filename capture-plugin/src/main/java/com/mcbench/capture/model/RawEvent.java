@@ -91,6 +91,17 @@ public final class RawEvent {
      */
     public static final int KIND_SWING = 22;
 
+    /**
+     * The release of a held right-click use: shooting a drawn bow or crossbow,
+     * finishing eating or drinking, lowering a raised shield. The client sends
+     * the start of the use as a use_item packet, which we already capture — but
+     * the release is a separate PLAYER_DIGGING action, and it is where the work
+     * happens: the arrow only spawns on release, and it then flies and ticks. A
+     * trace that captured the draw but not the shot replayed a bow that was never
+     * fired.
+     */
+    public static final int KIND_USE_ITEM_RELEASE = 23;
+
     public long tMicro;
     /** Wall-clock epoch millis, used for frame headers only; NOT encoded. */
     public long epochMs;

@@ -75,6 +75,8 @@ public final class InteropFixture {
             more.add(ev(16_000, pid, RawEvent.KIND_DIG, Payloads.dig(0, 10, 64, -5, 1)));
             // An off-hand arm swing.
             more.add(ev(17_000, pid, RawEvent.KIND_SWING, Payloads.swing(1)));
+            // Releasing a held use (bow shot / finish eating): no payload.
+            more.add(ev(18_000, pid, RawEvent.KIND_USE_ITEM_RELEASE, new byte[0]));
             w.writeFrame(more, 300L, 400L);
         }
         System.out.println("wrote " + outFile);
