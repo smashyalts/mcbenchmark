@@ -11,6 +11,7 @@ import com.github.retrooper.packetevents.event.PacketReceiveEvent;
 import com.github.retrooper.packetevents.protocol.packettype.PacketType;
 import com.github.retrooper.packetevents.protocol.packettype.PacketTypeCommon;
 import com.github.retrooper.packetevents.protocol.world.Location;
+import com.github.retrooper.packetevents.util.Vector3d;
 import com.github.retrooper.packetevents.util.Vector3i;
 import com.github.retrooper.packetevents.wrapper.play.client.WrapperPlayClientAnimation;
 import com.github.retrooper.packetevents.wrapper.play.client.WrapperPlayClientChatMessage;
@@ -18,6 +19,7 @@ import com.github.retrooper.packetevents.wrapper.play.client.WrapperPlayClientEn
 import com.github.retrooper.packetevents.wrapper.play.client.WrapperPlayClientHeldItemChange;
 import com.github.retrooper.packetevents.wrapper.play.client.WrapperPlayClientPlayerDigging;
 import com.github.retrooper.packetevents.wrapper.play.client.WrapperPlayClientPlayerFlying;
+import com.github.retrooper.packetevents.wrapper.play.client.WrapperPlayClientVehicleMove;
 
 import java.util.UUID;
 
@@ -86,7 +88,9 @@ public final class PacketCaptureListener extends PacketListenerAbstract {
         if (session == null) {
             return; // join not seen yet
         }
-        if (WrapperPlayClientPlayerFlying.isFlying(event.getPacketType())) {
+        if (event.getPacketType() == PacketType.Play.Client.VEHICLE_MOVE) {
+            onVehicleMove(event, uuid, session);
+        } else if (WrapperPlayClientPlayerFlying.isFlying(event.getPacketType())) {
             onMovement(event, uuid, session);
         } else {
             onAction(event, uuid, session);
@@ -226,6 +230,55 @@ public final class PacketCaptureListener extends PacketListenerAbstract {
 
     private static final byte[] EMPTY = new byte[0];
 
+    /**
+     * A player riding something moves, but not with their own position packets.
+     *
+     * The vanilla client stops sending move_player_pos while it is a passenger:
+     * the vehicle owns the position, so the client sends vehicle_move for the
+     * boat, horse or minecart, and only rotation for the player. Read through
+     * {@link #onMovement} that looks like standing still — hasPositionChanged is
+     * false, so the delta is zero and, worse, the baseline never advances.
+     *
+     * The consequences outlast the ride. Every event recorded while riding is
+     * filed under the mount point's chunk. When the player dismounts and the
+     * client resumes sending absolute positions, the first delta is the entire
+     * journey in one packet, which the server rejects as moving too quickly. And
+     * every block the trace touches afterwards is somewhere the bot never went,
+     * so digs and places land out of reach — a whole session quietly ruined by
+     * one boat trip.
+     *
+     * The vehicle's position is the player's position, so this feeds it through
+     * the same delta path as ordinary movement and advances the same baseline.
+     * The rotation-only packets that arrive alongside still record as real
+     * packets with a zero delta, which is exactly what the client sent.
+     *
+     * Replay reproduces the ride as a player travelling the same path rather than
+     * as a mounted one — the benchmark world has no guarantee of a boat to sit
+     * in. For a fast vehicle the server may speed-correct the bot, which is
+     * visible and self-correcting, unlike the silent drift it replaces.
+     */
+    private void onVehicleMove(PacketReceiveEvent event, UUID uuid, PlayerSession session) {
+        WrapperPlayClientVehicleMove w = new WrapperPlayClientVehicleMove(event);
+        Vector3d pos = w.getPosition();
+        double x = pos.getX(), y = pos.getY(), z = pos.getZ();
+        float yaw = w.getYaw(), pitch = w.getPitch();
+
+        if (!session.havePos()) {
+            session.setPos(x, y, z, yaw, pitch);
+            index.update(uuid, x, y, z);
+            return;
+        }
+
+        float dx = (float) (x - session.lastX());
+        float dy = (float) (y - session.lastY());
+        float dz = (float) (z - session.lastZ());
+        session.setPos(x, y, z, yaw, pitch);
+        index.update(uuid, x, y, z);
+
+        mgr.recordMovePacket(uuid, dx, dy, dz, yaw, pitch, w.isOnGround(),
+                (int) Math.floor(x), (int) Math.floor(z));
+    }
+
     private void onMovement(PacketReceiveEvent event, UUID uuid, PlayerSession session) {
         WrapperPlayClientPlayerFlying wrapper = wrapperFor(event);
         Location loc = wrapper.getLocation();
@@ -289,6 +342,7 @@ public final class PacketCaptureListener extends PacketListenerAbstract {
                 || type == PacketType.Play.Client.PLAYER_POSITION_AND_ROTATION
                 || type == PacketType.Play.Client.PLAYER_ROTATION
                 || type == PacketType.Play.Client.PLAYER_FLYING
+                || type == PacketType.Play.Client.VEHICLE_MOVE
                 || type == PacketType.Play.Client.PLAYER_DIGGING
                 || type == PacketType.Play.Client.ENTITY_ACTION
                 || type == PacketType.Play.Client.ANIMATION
