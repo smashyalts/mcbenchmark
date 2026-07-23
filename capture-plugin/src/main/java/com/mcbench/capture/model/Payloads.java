@@ -175,6 +175,23 @@ public final class Payloads {
         return new byte[] { (byte) (fullStack ? 1 : 0) };
     }
 
+    /** An arm swing, carrying which hand swung (0 main, 1 off). */
+    public static byte[] swing(int hand) {
+        return new byte[] { (byte) hand };
+    }
+
+    /**
+     * An entity action (sneak/sprint/leave-bed/horse/elytra): the protocol action
+     * id, then the jump boost, which is only meaningful for a horse jump and zero
+     * otherwise.
+     */
+    public static byte[] entityAction(int action, int jumpBoost) {
+        ByteWriter w = new ByteWriter();
+        w.varInt(action);
+        w.varInt(jumpBoost);
+        return w.toByteArray();
+    }
+
     /**
      * An absolute position the server moved the player to.
      *

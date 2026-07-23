@@ -126,10 +126,16 @@ func Flying(onGround bool) []byte {
 // EntityAction builds the serverbound entity_action body. The vanilla server
 // ignores the entity ID field and applies the action to the sending player.
 func EntityAction(action int32) []byte {
+	return EntityActionBoost(action, 0)
+}
+
+// EntityActionBoost is EntityAction carrying the jump boost, which the client
+// sends non-zero only for a horse jump (0..100) and zero for everything else.
+func EntityActionBoost(action, jumpBoost int32) []byte {
 	w := mcwire.NewWriter()
 	w.VarInt(0) // entity id (ignored by server)
 	w.VarInt(action)
-	w.VarInt(0) // jump boost
+	w.VarInt(jumpBoost)
 	return w.Bytes()
 }
 

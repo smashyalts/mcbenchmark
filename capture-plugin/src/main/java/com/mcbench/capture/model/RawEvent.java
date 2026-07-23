@@ -80,6 +80,37 @@ public final class RawEvent {
     /** The offhand swap (F). */
     public static final int KIND_SWAP_HANDS = 21;
 
+    /**
+     * An arm swing. The client sends one on every left-click — the start of a
+     * dig, every attack, and every swing that hits nothing at all. It is the
+     * single most frequent action a player performs, and the server broadcasts
+     * each one as an animation to every nearby player, so its cost scales with
+     * how many others are in view. Captured on its own because most swings
+     * accompany no other event we record: mining a long vein, or a player
+     * nervously swinging at air, is pure swing traffic that was invisible before.
+     */
+    public static final int KIND_SWING = 22;
+
+    /**
+     * The release of a held right-click use: shooting a drawn bow or crossbow,
+     * finishing eating or drinking, lowering a raised shield. The client sends
+     * the start of the use as a use_item packet, which we already capture — but
+     * the release is a separate PLAYER_DIGGING action, and it is where the work
+     * happens: the arrow only spawns on release, and it then flies and ticks. A
+     * trace that captured the draw but not the shot replayed a bow that was never
+     * fired.
+     */
+    public static final int KIND_USE_ITEM_RELEASE = 23;
+
+    /**
+     * An entity action from the wire: sneak, sprint, leave bed, the two horse-jump
+     * actions, open horse inventory, and the elytra launch. Replaces the Bukkit
+     * sprint/sneak toggle events, which fired on the main thread after validation
+     * and could see only those two — the elytra launch (which starts gliding
+     * physics) and the horse actions never reached a trace.
+     */
+    public static final int KIND_ENTITY_ACTION = 24;
+
     public long tMicro;
     /** Wall-clock epoch millis, used for frame headers only; NOT encoded. */
     public long epochMs;

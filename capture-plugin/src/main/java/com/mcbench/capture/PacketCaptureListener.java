@@ -11,11 +11,15 @@ import com.github.retrooper.packetevents.event.PacketReceiveEvent;
 import com.github.retrooper.packetevents.protocol.packettype.PacketType;
 import com.github.retrooper.packetevents.protocol.packettype.PacketTypeCommon;
 import com.github.retrooper.packetevents.protocol.world.Location;
+import com.github.retrooper.packetevents.util.Vector3d;
 import com.github.retrooper.packetevents.util.Vector3i;
+import com.github.retrooper.packetevents.wrapper.play.client.WrapperPlayClientAnimation;
 import com.github.retrooper.packetevents.wrapper.play.client.WrapperPlayClientChatMessage;
+import com.github.retrooper.packetevents.wrapper.play.client.WrapperPlayClientEntityAction;
 import com.github.retrooper.packetevents.wrapper.play.client.WrapperPlayClientHeldItemChange;
 import com.github.retrooper.packetevents.wrapper.play.client.WrapperPlayClientPlayerDigging;
 import com.github.retrooper.packetevents.wrapper.play.client.WrapperPlayClientPlayerFlying;
+import com.github.retrooper.packetevents.wrapper.play.client.WrapperPlayClientVehicleMove;
 
 import java.util.UUID;
 
@@ -84,7 +88,9 @@ public final class PacketCaptureListener extends PacketListenerAbstract {
         if (session == null) {
             return; // join not seen yet
         }
-        if (WrapperPlayClientPlayerFlying.isFlying(event.getPacketType())) {
+        if (event.getPacketType() == PacketType.Play.Client.VEHICLE_MOVE) {
+            onVehicleMove(event, uuid, session);
+        } else if (WrapperPlayClientPlayerFlying.isFlying(event.getPacketType())) {
             onMovement(event, uuid, session);
         } else {
             onAction(event, uuid, session);
@@ -128,13 +134,40 @@ public final class PacketCaptureListener extends PacketListenerAbstract {
                     record(uuid, session, RawEvent.KIND_DROP_ITEM,
                             Payloads.dropItem(action == 3), blockX(session), blockZ(session));
                     break;
+                case 5: // release a held use: bow/crossbow shot, finish eating, lower shield
+                    record(uuid, session, RawEvent.KIND_USE_ITEM_RELEASE, EMPTY,
+                            blockX(session), blockZ(session));
+                    break;
                 case 6: // swap with offhand
                     record(uuid, session, RawEvent.KIND_SWAP_HANDS, EMPTY,
                             blockX(session), blockZ(session));
                     break;
-                default: // release-use and stab carry no replay analogue yet
+                default: // any future digging action we do not yet model
                     break;
             }
+            return;
+        }
+        if (type == PacketType.Play.Client.ENTITY_ACTION) {
+            // Sneak, sprint, leave bed, horse jump, open horse inventory, start
+            // gliding. Taken here rather than from Bukkit's toggle events, which
+            // fire on the main thread after validation and can only see sneak and
+            // sprint — the elytra launch, which starts gliding physics, and the
+            // horse actions are invisible to them.
+            WrapperPlayClientEntityAction w = new WrapperPlayClientEntityAction(event);
+            int action = entityActionId(w.getAction());
+            if (action >= 0) {
+                record(uuid, session, RawEvent.KIND_ENTITY_ACTION,
+                        Payloads.entityAction(action, w.getJumpBoost()),
+                        blockX(session), blockZ(session));
+            }
+            return;
+        }
+        if (type == PacketType.Play.Client.ANIMATION) {
+            // One swing per left-click: dig start, attack, or a miss. getHand()
+            // is 0 (main) or 1 (off); getId() maps straight to the protocol value.
+            int hand = new WrapperPlayClientAnimation(event).getHand().getId();
+            record(uuid, session, RawEvent.KIND_SWING, Payloads.swing(hand),
+                    blockX(session), blockZ(session));
             return;
         }
         if (type == PacketType.Play.Client.HELD_ITEM_CHANGE) {
@@ -162,6 +195,28 @@ public final class PacketCaptureListener extends PacketListenerAbstract {
         }
     }
 
+    /**
+     * Maps the decoded entity action to its stable protocol id (0-8), the value
+     * the modern wire uses and the one replay writes back. Switching on the enum
+     * constant, rather than trusting its ordinal or PacketEvents' version-keyed
+     * getId, keeps capture correct regardless of which version decoded it.
+     * Anything we do not model returns -1 and is skipped.
+     */
+    private static int entityActionId(WrapperPlayClientEntityAction.Action a) {
+        switch (a) {
+            case START_SNEAKING: return 0;
+            case STOP_SNEAKING: return 1;
+            case LEAVE_BED: return 2;
+            case START_SPRINTING: return 3;
+            case STOP_SPRINTING: return 4;
+            case START_JUMPING_WITH_HORSE: return 5;
+            case STOP_JUMPING_WITH_HORSE: return 6;
+            case OPEN_HORSE_INVENTORY: return 7;
+            case START_FLYING_WITH_ELYTRA: return 8;
+            default: return -1;
+        }
+    }
+
     private void record(UUID uuid, PlayerSession s, int kind, byte[] payload, int bx, int bz) {
         mgr.recordFromPacket(uuid, kind, payload, s.dimensionId(), bx, bz);
     }
@@ -174,6 +229,55 @@ public final class PacketCaptureListener extends PacketListenerAbstract {
     private static final int MAX_CHAT = 256;
 
     private static final byte[] EMPTY = new byte[0];
+
+    /**
+     * A player riding something moves, but not with their own position packets.
+     *
+     * The vanilla client stops sending move_player_pos while it is a passenger:
+     * the vehicle owns the position, so the client sends vehicle_move for the
+     * boat, horse or minecart, and only rotation for the player. Read through
+     * {@link #onMovement} that looks like standing still — hasPositionChanged is
+     * false, so the delta is zero and, worse, the baseline never advances.
+     *
+     * The consequences outlast the ride. Every event recorded while riding is
+     * filed under the mount point's chunk. When the player dismounts and the
+     * client resumes sending absolute positions, the first delta is the entire
+     * journey in one packet, which the server rejects as moving too quickly. And
+     * every block the trace touches afterwards is somewhere the bot never went,
+     * so digs and places land out of reach — a whole session quietly ruined by
+     * one boat trip.
+     *
+     * The vehicle's position is the player's position, so this feeds it through
+     * the same delta path as ordinary movement and advances the same baseline.
+     * The rotation-only packets that arrive alongside still record as real
+     * packets with a zero delta, which is exactly what the client sent.
+     *
+     * Replay reproduces the ride as a player travelling the same path rather than
+     * as a mounted one — the benchmark world has no guarantee of a boat to sit
+     * in. For a fast vehicle the server may speed-correct the bot, which is
+     * visible and self-correcting, unlike the silent drift it replaces.
+     */
+    private void onVehicleMove(PacketReceiveEvent event, UUID uuid, PlayerSession session) {
+        WrapperPlayClientVehicleMove w = new WrapperPlayClientVehicleMove(event);
+        Vector3d pos = w.getPosition();
+        double x = pos.getX(), y = pos.getY(), z = pos.getZ();
+        float yaw = w.getYaw(), pitch = w.getPitch();
+
+        if (!session.havePos()) {
+            session.setPos(x, y, z, yaw, pitch);
+            index.update(uuid, x, y, z);
+            return;
+        }
+
+        float dx = (float) (x - session.lastX());
+        float dy = (float) (y - session.lastY());
+        float dz = (float) (z - session.lastZ());
+        session.setPos(x, y, z, yaw, pitch);
+        index.update(uuid, x, y, z);
+
+        mgr.recordMovePacket(uuid, dx, dy, dz, yaw, pitch, w.isOnGround(),
+                (int) Math.floor(x), (int) Math.floor(z));
+    }
 
     private void onMovement(PacketReceiveEvent event, UUID uuid, PlayerSession session) {
         WrapperPlayClientPlayerFlying wrapper = wrapperFor(event);
@@ -238,7 +342,10 @@ public final class PacketCaptureListener extends PacketListenerAbstract {
                 || type == PacketType.Play.Client.PLAYER_POSITION_AND_ROTATION
                 || type == PacketType.Play.Client.PLAYER_ROTATION
                 || type == PacketType.Play.Client.PLAYER_FLYING
+                || type == PacketType.Play.Client.VEHICLE_MOVE
                 || type == PacketType.Play.Client.PLAYER_DIGGING
+                || type == PacketType.Play.Client.ENTITY_ACTION
+                || type == PacketType.Play.Client.ANIMATION
                 || type == PacketType.Play.Client.HELD_ITEM_CHANGE
                 || type == PacketType.Play.Client.CHAT_MESSAGE;
     }

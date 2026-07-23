@@ -257,6 +257,35 @@ func (s *Session) dispatch(e tracefile.TraceEvent) {
 	case rawevent.KindSwapHands:
 		_ = s.send(mcproto.SBPlayBlockDig, mcproto.BlockDig(mcproto.SwapHands, 0, 0, 0, 0, 0))
 
+	case rawevent.KindUseItemRelease:
+		// Finishing a held use — the bow/crossbow shot, the last bite, lowering a
+		// shield. The draw went out earlier as a use_item; this is the release,
+		// and for a bow it is the packet that actually spawns the arrow.
+		_ = s.send(mcproto.SBPlayBlockDig, mcproto.BlockDig(mcproto.ReleaseUseItem, 0, 0, 0, 0, 0))
+
+	case rawevent.KindEntityAction:
+		// Sneak, sprint, leave bed, horse jump, open horse inventory, elytra
+		// launch — captured from the wire with their real protocol id, so replay
+		// forwards the id verbatim rather than reconstructing it from a toggle.
+		action, boost, err := rawevent.DecodeEntityAction(e.Data)
+		if err != nil {
+			handled = false
+			break
+		}
+		_ = s.send(mcproto.SBPlayEntityAction, mcproto.EntityActionBoost(action, boost))
+
+	case rawevent.KindSwing:
+		// The most frequent thing a player sends, and the whole reason to capture
+		// it separately: most swings ride along with no other event. Forward the
+		// hand the client actually swung. The server re-broadcasts each swing to
+		// everyone nearby, so this is animation-fanout load, not a no-op.
+		hand, err := rawevent.DecodeSwing(e.Data)
+		if err != nil {
+			handled = false
+			break
+		}
+		_ = s.send(mcproto.SBPlayArmAnimation, mcproto.ArmAnimation(hand))
+
 	case rawevent.KindCmd:
 		raw, err := rawevent.DecodeCmd(e.Data)
 		if err != nil {

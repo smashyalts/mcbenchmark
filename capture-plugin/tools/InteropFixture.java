@@ -73,6 +73,12 @@ public final class InteropFixture {
             more.add(ev(15_000, pid, RawEvent.KIND_SWAP_HANDS, new byte[0]));
             // A dig start, which capture could not observe until it read packets.
             more.add(ev(16_000, pid, RawEvent.KIND_DIG, Payloads.dig(0, 10, 64, -5, 1)));
+            // An off-hand arm swing.
+            more.add(ev(17_000, pid, RawEvent.KIND_SWING, Payloads.swing(1)));
+            // Releasing a held use (bow shot / finish eating): no payload.
+            more.add(ev(18_000, pid, RawEvent.KIND_USE_ITEM_RELEASE, new byte[0]));
+            // An entity action: horse jump (5) with a non-zero jump boost.
+            more.add(ev(19_000, pid, RawEvent.KIND_ENTITY_ACTION, Payloads.entityAction(5, 100)));
             w.writeFrame(more, 300L, 400L);
         }
         System.out.println("wrote " + outFile);
